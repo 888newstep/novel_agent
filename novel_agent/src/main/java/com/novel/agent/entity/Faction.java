@@ -1,0 +1,77 @@
+package com.novel.agent.entity;
+
+import jakarta.persistence.*;
+import lombok.*;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "factions", indexes = {
+        @Index(name = "idx_novel", columnList = "novel_id"),
+        @Index(name = "idx_leader", columnList = "leader_id"),
+        @Index(name = "idx_rank", columnList = "rank")
+})
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Faction {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "novel_id", nullable = false)
+    private Long novelId;
+
+    @Column(nullable = false, length = 100)
+    private String name;
+
+    @Column(length = 50)
+    private String rank;
+
+    @Column(length = 20)
+    @Builder.Default
+    private String talent = "下品";
+
+    @Column(length = 50)
+    private String element;
+
+    @Column(length = 50)
+    private String category;
+
+    @Column(name = "leader_id")
+    private Long leaderId;
+
+    @Column(length = 200)
+    private String location;
+
+    @Column(columnDefinition = "TEXT")
+    private String description;
+
+    @Column(columnDefinition = "TEXT")
+    private String creed;
+
+    @Column(length = 20)
+    @Builder.Default
+    private String status = "active";
+
+    @Column(name = "first_appear")
+    private Integer firstAppear;
+
+    @Column(name = "created_at", updatable = false)
+    private LocalDateTime createdAt;
+
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+
+    @PrePersist
+    protected void onCreate() {
+        createdAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now();
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
+}

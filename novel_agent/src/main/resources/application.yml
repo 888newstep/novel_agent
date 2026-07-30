@@ -1,0 +1,95 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: novel-agent
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/novel_agent?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:root}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MySQLDialect
+
+# =============================================
+# DeepSeek API 配置
+# =============================================
+ai:
+  model:
+    provider: deepseek
+    deepseek:
+      api-key: ${DEEPSEEK_API_KEY:your-api-key}
+      model-name: deepseek-chat
+      base-url: https://api.deepseek.com/v1
+    qianwen:
+      api-key: ${QIANWEN_API_KEY:your-api-key}
+      model-name: qwen-max
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    local:
+      base-url: http://localhost:11434/v1
+      model-name: qwen2.5:7b
+      api-key: dummy
+    fallback:
+      enabled: true
+      max-retries: 1
+
+  embedding:
+    provider: siliconflow        # ollama | siliconflow
+    ollama:
+      base-url: http://localhost:11434
+      model-name: bge-m3
+      dimension: 1024
+    siliconflow:
+      base-url: https://api.siliconflow.cn/v1
+      model-name: BAAI/bge-m3
+      dimension: 1024
+      api-key: ${SILICONFLOW_API_KEY}
+
+# =============================================
+# Ollama Embedding（本地 WSL2）
+# =============================================
+ollama:
+  host: http://localhost:11434
+  model: bge-m3
+
+# =============================================
+# Milvus（云服务器）
+# =============================================
+milvus:
+  host: ${MILVUS_HOST:49.234.187.76}
+  port: ${MILVUS_PORT:19530}
+  collection:
+    segments: novel_segments
+    events: novel_events
+    characters: novel_characters
+    items: novel_items
+    faction_inspire: novel_faction_inspire
+  write:
+    batch-size: 18                        # 450 chars × 18 = 8100 tokens < 8192
+    flush-interval: 28                    # 每 N 批执行一次 flush
+
+logging:
+  level:
+    root: INFO
+    com.novel.agent: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+knowledge:
+  novel-dir: novels/           # TXT 小说存放目录
+  batch-size: 10               # 批量处理大小
