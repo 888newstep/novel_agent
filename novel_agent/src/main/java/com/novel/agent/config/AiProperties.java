@@ -11,6 +11,7 @@ public class AiProperties {
 
     private Model model = new Model();
     private Embedding embedding = new Embedding();
+    private CostControl costControl = new CostControl();
 
     @Data
     public static class Model {
@@ -68,5 +69,27 @@ public class AiProperties {
         private String modelName = "BAAI/bge-m3";
         private int dimension = 1024;
         private String apiKey;
+    }
+
+    @Data
+    public static class CostControl {
+        private boolean enabled = true;
+        private boolean strictMode = false;
+        private int recentRecords = 200;
+        private int maxEstimatedTokensPerRequest = 12000;
+        private int reservedCompletionTokens = 1200;
+        private long dailyTokenBudget = 300000;
+        private long monthlyTokenBudget = 5000000;
+        private double dailyBudgetUsd = 5.0;
+        private double monthlyBudgetUsd = 100.0;
+        private Pricing pricing = new Pricing();
+    }
+
+    @Data
+    public static class Pricing {
+        private String currency = "USD";
+        private double inputPerMillionTokens = 0.0;
+        private double outputPerMillionTokens = 0.0;
+        private double embeddingPerMillionTokens = 0.0;
     }
 }

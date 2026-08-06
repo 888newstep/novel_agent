@@ -16,33 +16,32 @@ import org.springframework.web.client.RestTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Embedding 服务 — 支持双 provider 切换
- * <p>
- * provider = ollama（默认）：调用本地 WSL2 Ollama /api/embed
- * provider = siliconflow：调用硅基流动 BAAI/bge-m3 API
- * <p>
- * 优化策略：
- * - 连接超时 120s，适配大 batch 推理
- * - 文本预处理：合并多余空白，减少 token 消耗
- * - 批量调用 provider 的 batch API
+ * Embedding ?? ? ??? provider ??
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class EmbeddingService {
 
+    private static final int EMBEDDING_CACHE_SIZE = 512;
+
     private final AiProperties aiProperties;
+    private final TokenCostService tokenCostService;
 
     private RestTemplate restTemplate;
     private String provider;
     private String baseUrl;
     private String modelName;
     private int dimension;
-    private String apiKey; // 仅 siliconflow provider 使用
+    private Map<String, List<Float>> embeddingCache;
+    private String apiKey;
 
     @PostConstruct
     public void init() {
@@ -51,7 +50,6 @@ public class EmbeddingService {
         factory.setReadTimeout(600_000);
         this.restTemplate = new RestTemplate(factory);
 
-        // 从配置加载 provider 参数
         AiProperties.Embedding embeddingConfig = aiProperties.getEmbedding();
         this.provider = embeddingConfig.getProvider();
 
@@ -65,7 +63,6 @@ public class EmbeddingService {
                 log.info("Embedding provider: siliconflow, model: {}, dim: {}", modelName, dimension);
             }
             default -> {
-                // 默认 ollama
                 AiProperties.OllamaEmbedding config = embeddingConfig.getOllama();
                 this.baseUrl = config.getBaseUrl();
                 this.modelName = config.getModelName();
@@ -73,7 +70,6 @@ public class EmbeddingService {
                 this.apiKey = null;
                 log.info("Embedding provider: ollama, model: {}, dim: {}", modelName, dimension);
 
-                // Ollama 0.17.5 cannot parse raw UTF-8 in JSON, must escape non-ASCII
                 List<MappingJackson2HttpMessageConverter> converters = restTemplate.getMessageConverters().stream()
                         .filter(c -> c instanceof MappingJackson2HttpMessageConverter)
                         .map(c -> (MappingJackson2HttpMessageConverter) c)
@@ -84,87 +80,143 @@ public class EmbeddingService {
                 }
             }
         }
+
+        this.embeddingCache = Collections.synchronizedMap(new LinkedHashMap<>(EMBEDDING_CACHE_SIZE, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, List<Float>> eldest) {
+                return size() > EMBEDDING_CACHE_SIZE;
+            }
+        });
     }
 
-    /**
-     * 文本预处理：合并多余换行、连续空格，减少 token 消耗
-     */
     public String preprocess(String text) {
-        if (text == null) return "";
-        return text.trim().replaceAll("\\s+", " ");
+        if (text == null) {
+            return "";
+        }
+        return text.trim().replaceAll("\s+", " ");
     }
 
-    /**
-     * 生成单条文本向量
-     */
     @SuppressWarnings("unchecked")
     public List<Float> generateEmbedding(String text) {
         String cleanText = preprocess(text);
-        List<Float> result = switch (provider) {
-            case "siliconflow" -> callSiliconflow(List.of(cleanText)).get(0);
-            default -> {
-                Map<String, Object> request = buildOllamaRequest(cleanText);
-                Map<String, Object> response = postForEmbed(buildOllamaUrl(), request);
-                List<List<Double>> embeddings = (List<List<Double>>) response.get("embeddings");
-                if (embeddings == null || embeddings.isEmpty()) {
-                    throw new RuntimeException("Ollama 返回的 embeddings 列表为空");
+        if (cleanText.isEmpty()) {
+            return List.of();
+        }
+
+        List<Float> cached = embeddingCache.get(cleanText);
+        if (cached != null) {
+            return cached;
+        }
+
+        TokenCostService.UsageReservation reservation = tokenCostService.reserveEmbeddingRequest(
+                provider, modelName, "embedding.single", List.of(cleanText)
+        );
+        try {
+            List<Float> result = switch (provider) {
+                case "siliconflow" -> callSiliconflow(List.of(cleanText)).get(0);
+                default -> {
+                    Map<String, Object> request = buildOllamaRequest(cleanText);
+                    Map<String, Object> response = postForEmbed(buildOllamaUrl(), request);
+                    List<List<Double>> embeddings = (List<List<Double>>) response.get("embeddings");
+                    if (embeddings == null || embeddings.isEmpty()) {
+                        throw new RuntimeException("Ollama embedding result is empty");
+                    }
+                    List<Double> embedding = embeddings.get(0);
+                    if (embedding == null) {
+                        throw new RuntimeException("Ollama embedding vector is null");
+                    }
+                    yield embedding.stream().map(Double::floatValue).toList();
                 }
-                List<Double> embedding = embeddings.get(0);
-                if (embedding == null) {
-                    throw new RuntimeException("Ollama 返回的 embedding 向量为空");
-                }
-                yield embedding.stream().map(Double::floatValue).toList();
-            }
-        };
-        return result;
+            };
+
+            List<Float> immutable = List.copyOf(result);
+            embeddingCache.put(cleanText, immutable);
+            tokenCostService.recordEmbeddingSuccess(reservation, tokenCostService.estimateTokens(cleanText));
+            return immutable;
+        } catch (RuntimeException ex) {
+            tokenCostService.recordFailure(reservation, ex.getMessage());
+            throw ex;
+        }
     }
 
-    /**
-     * 批量生成向量
-     */
     @SuppressWarnings("unchecked")
     public List<List<Float>> batchGenerateEmbedding(List<String> texts) {
         List<String> cleanTexts = texts.stream()
                 .map(this::preprocess)
                 .toList();
 
+        List<List<Float>> results = new ArrayList<>(Collections.nCopies(cleanTexts.size(), null));
+        List<String> missingTexts = new ArrayList<>();
+        List<Integer> missingIndexes = new ArrayList<>();
+
+        for (int i = 0; i < cleanTexts.size(); i++) {
+            String cleanText = cleanTexts.get(i);
+            if (cleanText.isEmpty()) {
+                results.set(i, List.of());
+                continue;
+            }
+
+            List<Float> cached = embeddingCache.get(cleanText);
+            if (cached != null) {
+                results.set(i, cached);
+                continue;
+            }
+
+            missingTexts.add(cleanText);
+            missingIndexes.add(i);
+        }
+
+        if (missingTexts.isEmpty()) {
+            return results;
+        }
+
+        TokenCostService.UsageReservation reservation = tokenCostService.reserveEmbeddingRequest(
+                provider, modelName, "embedding.batch", missingTexts
+        );
+
         try {
-            return switch (provider) {
-                case "siliconflow" -> callSiliconflow(cleanTexts);
+            List<List<Float>> generated = switch (provider) {
+                case "siliconflow" -> callSiliconflow(missingTexts);
                 default -> {
-                    Map<String, Object> request = buildOllamaRequest(cleanTexts);
+                    Map<String, Object> request = buildOllamaRequest(missingTexts);
                     Map<String, Object> response = postForEmbed(buildOllamaUrl(), request);
                     List<List<Double>> embeddings = (List<List<Double>>) response.get("embeddings");
                     if (embeddings == null || embeddings.isEmpty()) {
-                        throw new RuntimeException("Ollama 批量请求返回的 embeddings 列表为空");
+                        throw new RuntimeException("Ollama batch embedding result is empty");
                     }
-                    log.debug("批量生成向量 {} 条，返回 {} 条", texts.size(), embeddings.size());
-                    List<List<Float>> results = new ArrayList<>();
+                    List<List<Float>> generatedResults = new ArrayList<>();
                     for (List<Double> emb : embeddings) {
-                        results.add(emb.stream().map(Double::floatValue).toList());
+                        generatedResults.add(emb.stream().map(Double::floatValue).toList());
                     }
-                    yield results;
+                    yield generatedResults;
                 }
             };
+
+            for (int i = 0; i < missingTexts.size(); i++) {
+                List<Float> embedding = generated.get(i);
+                List<Float> immutable = embedding == null ? null : List.copyOf(embedding);
+                if (immutable != null) {
+                    embeddingCache.put(missingTexts.get(i), immutable);
+                }
+                results.set(missingIndexes.get(i), immutable);
+            }
+
+            tokenCostService.recordEmbeddingSuccess(reservation, tokenCostService.estimateTokens(missingTexts));
+            return results;
         } catch (Exception e) {
-            log.error("批量生成向量失败 (batch={}, provider={})", texts.size(), provider, e);
-            // 降级：逐条重试
-            List<List<Float>> results = new ArrayList<>();
-            for (String text : cleanTexts) {
+            log.error("Batch embedding failed (batch={}, provider={})", texts.size(), provider, e);
+            for (int i = 0; i < missingTexts.size(); i++) {
+                String text = missingTexts.get(i);
                 try {
-                    results.add(generateEmbedding(text));
+                    results.set(missingIndexes.get(i), generateEmbedding(text));
                 } catch (Exception ex) {
-                    log.error("单条生成向量失败: {}", text.substring(0, Math.min(50, text.length())), ex);
-                    results.add(null);
+                    log.error("Single embedding fallback failed: {}", text.substring(0, Math.min(50, text.length())), ex);
+                    results.set(missingIndexes.get(i), null);
                 }
             }
             return results;
         }
     }
-
-    // =============================================
-    // Ollama 调用
-    // =============================================
 
     private String buildOllamaUrl() {
         return baseUrl + "/api/embed";
@@ -186,46 +238,44 @@ public class EmbeddingService {
 
         Map<String, Object> response = restTemplate.postForObject(url, entity, Map.class);
         if (response == null) {
-            throw new RuntimeException("Ollama 返回空响应");
+            throw new RuntimeException("Ollama ?????");
         }
         return response;
     }
 
-    // =============================================
-    // SiliconFlow 调用（OpenAI 兼容接口）
-    // =============================================
-
     @SuppressWarnings("unchecked")
     private List<List<Float>> callSiliconflow(List<String> texts) {
-        // 构建请求体
         Map<String, Object> request = new java.util.HashMap<>();
         request.put("model", modelName);
-        if (texts.size() == 1) {
-            request.put("input", texts.get(0));
-        } else {
-            request.put("input", texts);
-        }
+        request.put("input", texts.size() == 1 ? texts.get(0) : texts);
 
-        // 设置 headers
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(new MediaType("application", "json", StandardCharsets.UTF_8));
         headers.setBearerAuth(apiKey);
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
 
-        // 发送请求
         String url = baseUrl + "/embeddings";
-        Map<String, Object> response = restTemplate.postForObject(url, entity, Map.class);
+        log.info("?????? API: {} ???, model={}", texts.size(), modelName);
+        long start = System.currentTimeMillis();
+        Map<String, Object> response;
+        try {
+            response = restTemplate.postForObject(url, entity, Map.class);
+        } catch (Exception e) {
+            log.error("???? API ????: {}ms - {}", System.currentTimeMillis() - start, e.getMessage());
+            throw e;
+        }
+        log.info("???? API ????: {}ms", System.currentTimeMillis() - start);
         if (response == null) {
-            throw new RuntimeException("SiliconFlow 返回空响应");
+            throw new RuntimeException("SiliconFlow ?????");
         }
 
-        // 解析响应
         List<Map<String, Object>> data = (List<Map<String, Object>>) response.get("data");
         if (data == null || data.isEmpty()) {
-            throw new RuntimeException("SiliconFlow 返回的 data 列表为空");
+            throw new RuntimeException("SiliconFlow ??? data ????");
         }
 
-        log.debug("SiliconFlow 批量生成向量 {} 条，返回 {} 条", texts.size(), data.size());
+        data.sort(Comparator.comparingInt(item -> ((Number) item.getOrDefault("index", 0)).intValue()));
+
         List<List<Float>> results = new ArrayList<>();
         for (Map<String, Object> item : data) {
             List<Double> embedding = (List<Double>) item.get("embedding");

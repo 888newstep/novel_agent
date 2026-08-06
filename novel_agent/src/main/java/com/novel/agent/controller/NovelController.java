@@ -77,32 +77,26 @@ public class NovelController {
     public ResponseEntity<Map<String, Object>> generateChapter(
             @PathVariable Long novelId,
             @RequestParam String topic,
-            @RequestParam(defaultValue = "仙侠") String style,
-            @RequestParam(defaultValue = "1A") String promptId) {
+            @RequestParam(defaultValue = "??") String style,
+            @RequestParam(defaultValue = "1A") String promptId,
+            @RequestParam(required = false) Integer currentChapterNum) {
 
-        // 获取小说设定
         Novel novel = novelRepository.findById(novelId).orElse(null);
         String worldSetting = novel != null ? novel.getWorldSetting() : "";
+        MilvusSearchService.WritingMemory memory = milvusSearchService.buildWritingMemory(novelId, topic, currentChapterNum);
 
-        // 检索相关历史情节
-        List<Map<String, Object>> context = milvusSearchService.searchSegments(novelId, topic, 3);
-
-        // 检索未回收伏笔
-        List<Map<String, Object>> hooks = milvusSearchService.searchUnresolvedEvents(novelId, topic, 3);
-
-        // 构建系统提示词
-        String systemPrompt = buildSystemPrompt(style, worldSetting, context, hooks, promptId);
-
-        // 调用 DeepSeek 生成
-        String userPrompt = String.format("请以%s的风格，写一篇关于《%s》的文章。", style, topic);
+        String systemPrompt = buildSystemPrompt(style, worldSetting, memory, promptId);
+        String userPrompt = String.format("??%s???????%s???????????", style, topic);
         String generated = deepSeekService.chat(systemPrompt, userPrompt);
 
         Map<String, Object> result = new HashMap<>();
         result.put("topic", topic);
         result.put("style", style);
+        result.put("currentChapterNum", currentChapterNum);
         result.put("content", generated);
-        result.put("contextCount", context.size());
-        result.put("hookCount", hooks.size());
+        result.put("memoryCount", memory.getTotalCount());
+        result.put("memory", buildMemorySummary(memory));
+        result.put("promptChars", systemPrompt.length() + userPrompt.length());
         return ResponseEntity.ok(result);
     }
 
@@ -114,10 +108,12 @@ public class NovelController {
     public ResponseEntity<Map<String, Object>> searchSegments(
             @PathVariable Long novelId,
             @RequestParam String query,
-            @RequestParam(defaultValue = "5") int topK) {
-        List<Map<String, Object>> results = milvusSearchService.searchSegments(novelId, query, topK);
+            @RequestParam(defaultValue = "5") int topK,
+            @RequestParam(required = false) Integer currentChapterNum) {
+        List<Map<String, Object>> results = milvusSearchService.searchSegments(novelId, query, topK, currentChapterNum);
         Map<String, Object> response = new HashMap<>();
         response.put("query", query);
+        response.put("currentChapterNum", currentChapterNum);
         response.put("results", results);
         response.put("count", results.size());
         return ResponseEntity.ok(response);
@@ -127,12 +123,28 @@ public class NovelController {
     public ResponseEntity<Map<String, Object>> searchHooks(
             @PathVariable Long novelId,
             @RequestParam String query,
-            @RequestParam(defaultValue = "5") int topK) {
-        List<Map<String, Object>> results = milvusSearchService.searchUnresolvedEvents(novelId, query, topK);
+            @RequestParam(defaultValue = "5") int topK,
+            @RequestParam(required = false) Integer currentChapterNum) {
+        List<Map<String, Object>> results = milvusSearchService.searchUnresolvedEvents(novelId, query, topK, currentChapterNum);
         Map<String, Object> response = new HashMap<>();
         response.put("query", query);
+        response.put("currentChapterNum", currentChapterNum);
         response.put("results", results);
         response.put("count", results.size());
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/{novelId}/memory")
+    public ResponseEntity<Map<String, Object>> previewMemory(
+            @PathVariable Long novelId,
+            @RequestParam String query,
+            @RequestParam(required = false) Integer currentChapterNum) {
+        MilvusSearchService.WritingMemory memory = milvusSearchService.buildWritingMemory(novelId, query, currentChapterNum);
+        Map<String, Object> response = new HashMap<>();
+        response.put("query", query);
+        response.put("currentChapterNum", currentChapterNum);
+        response.put("memory", memory);
+        response.put("summary", buildMemorySummary(memory));
         return ResponseEntity.ok(response);
     }
 
@@ -362,31 +374,110 @@ public class NovelController {
     }
 
     private String buildSystemPrompt(String style, String worldSetting,
-                                      List<Map<String, Object>> context,
-                                      List<Map<String, Object>> hooks,
+                                      MilvusSearchService.WritingMemory memory,
                                       String promptId) {
         StringBuilder sb = new StringBuilder();
         sb.append(SYSTEM_PROMPTS.getOrDefault(promptId, SYSTEM_PROMPTS.get("1A")));
 
         if (worldSetting != null && !worldSetting.isEmpty()) {
-            sb.append("\n\n【小说世界观设定】\n").append(worldSetting);
+            sb.append("\n\n??????\n").append(trimText(worldSetting, 220));
         }
 
-        if (!context.isEmpty()) {
-            sb.append("\n\n【相关历史情节（供参考）】\n");
-            for (int i = 0; i < context.size(); i++) {
-                sb.append("[").append(i + 1).append("] ").append(context.get(i).get("content")).append("\n");
-            }
+        if (memory.getCurrentChapterNum() != null) {
+            sb.append("\n\n????????\n?").append(memory.getCurrentChapterNum()).append("?\n");
         }
 
-        if (!hooks.isEmpty()) {
-            sb.append("\n\n【未回收伏笔（请考虑在创作中回收）】\n");
-            for (int i = 0; i < hooks.size(); i++) {
-                sb.append("[").append(i + 1).append("] ").append(hooks.get(i).get("title"))
-                        .append("：").append(hooks.get(i).get("description")).append("\n");
-            }
-        }
+        appendSection(sb, "????", memory.getRecentChapters(), 2, item ->
+                String.format("?%s? %s?%s",
+                        item.get("chapter_num"),
+                        trimText(firstNonBlank(item.get("title"), "?????"), 16),
+                        trimText(firstNonBlank(item.get("summary"), item.get("key_events"), "????"), 60)));
+
+        appendSection(sb, "????", memory.getSegments(), 3, item ->
+                trimText(firstNonBlank(item.get("content"), ""), 80));
+
+        appendSection(sb, "?????", memory.getHooks(), 2, item ->
+                String.format("%s?%s",
+                        trimText(firstNonBlank(item.get("title"), "?????"), 16),
+                        trimText(firstNonBlank(item.get("description"), ""), 56)));
+
+        appendSection(sb, "????", memory.getCharacters(), 3, item ->
+                String.format("%s?%s",
+                        firstNonBlank(item.get("name"), "????"),
+                        trimText(firstNonBlank(item.get("char_text"), ""), 56)));
+
+        appendSection(sb, "????", memory.getItems(), 1, item ->
+                String.format("%s?%s",
+                        firstNonBlank(item.get("name"), "?????"),
+                        trimText(firstNonBlank(item.get("item_text"), ""), 42)));
+
+        appendSection(sb, "????", memory.getFactions(), 1, item ->
+                String.format("%s?%s",
+                        firstNonBlank(item.get("title"), "?????"),
+                        trimText(firstNonBlank(item.get("content"), ""), 42)));
+
+        appendSection(sb, "????", memory.getRelations(), 2, item ->
+                String.format("%s-%s?%s??%s",
+                        firstNonBlank(item.get("source_name"), "??"),
+                        firstNonBlank(item.get("target_name"), "??"),
+                        firstNonBlank(item.get("relation_type"), "??"),
+                        trimText(firstNonBlank(item.get("description"), ""), 36)));
+
+        sb.append("\n\n??????\n")
+                .append("- ???????????????????\n")
+                .append("- ????????????????\n")
+                .append("- ??????????????????????\n")
+                .append("- ?????").append(style).append("?\n");
 
         return sb.toString();
+    }
+
+    private void appendSection(StringBuilder sb, String title,
+                               List<Map<String, Object>> items,
+                               int maxItems,
+                               java.util.function.Function<Map<String, Object>, String> formatter) {
+        if (items == null || items.isEmpty() || maxItems <= 0) {
+            return;
+        }
+        sb.append("\n\n?").append(title).append("?\n");
+        int count = Math.min(items.size(), maxItems);
+        for (int i = 0; i < count; i++) {
+            sb.append("[").append(i + 1).append("] ")
+                    .append(formatter.apply(items.get(i)))
+                    .append("\n");
+        }
+    }
+
+    private Map<String, Object> buildMemorySummary(MilvusSearchService.WritingMemory memory) {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("currentChapterNum", memory.getCurrentChapterNum());
+        summary.put("recentChapters", memory.getRecentChapters().size());
+        summary.put("segments", memory.getSegments().size());
+        summary.put("hooks", memory.getHooks().size());
+        summary.put("characters", memory.getCharacters().size());
+        summary.put("items", memory.getItems().size());
+        summary.put("factions", memory.getFactions().size());
+        summary.put("relations", memory.getRelations().size());
+        summary.put("total", memory.getTotalCount());
+        return summary;
+    }
+
+    private String firstNonBlank(Object... values) {
+        for (Object value : values) {
+            if (value != null) {
+                String text = value.toString().trim();
+                if (!text.isEmpty()) {
+                    return text;
+                }
+            }
+        }
+        return "";
+    }
+
+    private String trimText(String text, int maxLength) {
+        if (text == null || text.length() <= maxLength) {
+            return text == null ? "" : text;
+        }
+        return text.substring(0, Math.max(0, maxLength - 3)) + "...";
     }
 }

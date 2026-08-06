@@ -1,0 +1,102 @@
+[
+  {
+    "query": "主角在森林中遭遇妖兽袭击",
+    "expectedKeywords": ["妖兽", "森林", "战斗", "袭击"],
+    "category": "战斗场景"
+  },
+  {
+    "query": "两名修士在宗门比武场对决",
+    "expectedKeywords": ["修士", "比武", "对决", "宗门", "战斗"],
+    "category": "战斗场景"
+  },
+  {
+    "query": "主角突破金丹境界时的感悟",
+    "expectedKeywords": ["突破", "金丹", "境界", "感悟", "修炼"],
+    "category": "修炼突破"
+  },
+  {
+    "query": "炼丹师在丹房炼制丹药",
+    "expectedKeywords": ["炼丹", "丹房", "丹药", "炼制"],
+    "category": "修炼突破"
+  },
+  {
+    "query": "主角与红颜知己在月下谈心",
+    "expectedKeywords": ["谈心", "月下", "红颜", "感情", "对话"],
+    "category": "情感对话"
+  },
+  {
+    "query": "师尊传授弟子一套剑法",
+    "expectedKeywords": ["师尊", "弟子", "传授", "剑法", "教导"],
+    "category": "师徒互动"
+  },
+  {
+    "query": "拍卖会上出现一件上古神器",
+    "expectedKeywords": ["拍卖", "神器", "上古", "法宝", "竞价"],
+    "category": "法宝机缘"
+  },
+  {
+    "query": "主角在秘境中寻找天材地宝",
+    "expectedKeywords": ["秘境", "天材地宝", "寻宝", "机缘"],
+    "category": "法宝机缘"
+  },
+  {
+    "query": "宗门大比中弟子们激烈角逐",
+    "expectedKeywords": ["宗门大比", "角逐", "弟子", "比试"],
+    "category": "宗门活动"
+  },
+  {
+    "query": "主角被仇家追杀逃亡",
+    "expectedKeywords": ["追杀", "逃亡", "仇家", "危险"],
+    "category": "危机冲突"
+  },
+  {
+    "query": "两位大能在虚空中斗法",
+    "expectedKeywords": ["斗法", "大能", "虚空", "法术"],
+    "category": "战斗场景"
+  },
+  {
+    "query": "主角在洞府中闭关修炼",
+    "expectedKeywords": ["闭关", "洞府", "修炼", "静修"],
+    "category": "修炼突破"
+  },
+  {
+    "query": "灵兽与主人并肩作战",
+    "expectedKeywords": ["灵兽", "主人", "并肩作战", "伙伴"],
+    "category": "灵兽伙伴"
+  },
+  {
+    "query": "修仙者渡天劫时的场景",
+    "expectedKeywords": ["天劫", "渡劫", "雷劫", "修仙"],
+    "category": "修炼突破"
+  },
+  {
+    "query": "主角捡到一枚神秘的储物戒指",
+    "expectedKeywords": ["储物戒指", "神秘", "机缘", "发现"],
+    "category": "法宝机缘"
+  },
+  {
+    "query": "仙门招收新弟子的入门考核",
+    "expectedKeywords": ["入门", "考核", "仙门", "弟子", "招收"],
+    "category": "宗门活动"
+  },
+  {
+    "query": "主角在酒楼听说书人讲江湖轶事",
+    "expectedKeywords": ["酒楼", "说书", "江湖", "轶事"],
+    "category": "日常场景"
+  },
+  {
+    "query": "阵法大师布置护山大阵",
+    "expectedKeywords": ["阵法", "护山大阵", "布置", "大师"],
+    "category": "阵法符箓"
+  },
+  {
+    "query": "主角与宿敌在悬崖边决战",
+    "expectedKeywords": ["决战", "宿敌", "悬崖", "生死"],
+    "category": "战斗场景"
+  },
+  {
+    "query": "女修在花海中抚琴",
+    "expectedKeywords": ["抚琴", "花海", "女修", "琴音"],
+    "category": "日常场景"
+  }
+]

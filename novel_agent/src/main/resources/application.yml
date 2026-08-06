@@ -60,6 +60,22 @@ ai:
       dimension: 1024
       api-key: ${SILICONFLOW_API_KEY}
 
+  cost-control:
+    enabled: true
+    strict-mode: false
+    recent-records: 200
+    max-estimated-tokens-per-request: 12000
+    reserved-completion-tokens: 1200
+    daily-token-budget: 300000
+    monthly-token-budget: 5000000
+    daily-budget-usd: 5.0
+    monthly-budget-usd: 100.0
+    pricing:
+      currency: USD
+      input-per-million-tokens: 0.0        # ?????????????????
+      output-per-million-tokens: 0.0       # ?????????????????
+      embedding-per-million-tokens: 0.0    # ?????????????????
+
 # =============================================
 # Ollama Embedding（本地 WSL2）
 # =============================================

@@ -17,12 +17,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
-/**
- * DeepSeek API 调用服务
- * 提供两种调用方式：
- * 1. 通过 langchain4j ChatLanguageModel（推荐）
- * 2. 通过 RestTemplate 直接调用 DeepSeek API
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -30,6 +24,7 @@ public class DeepSeekService {
 
     private final ChatLanguageModel chatLanguageModel;
     private final AiProperties aiProperties;
+    private final TokenCostService tokenCostService;
 
     private RestTemplate restTemplate;
 
@@ -41,23 +36,36 @@ public class DeepSeekService {
         this.restTemplate = new RestTemplate(factory);
     }
 
-    /**
-     * 使用 langchain4j 调用 DeepSeek 生成文本
-     */
     public String chat(String systemPrompt, String userPrompt) {
         String fullPrompt = buildPrompt(systemPrompt, userPrompt);
-        String response = chatLanguageModel.generate(fullPrompt);
-        log.info("DeepSeek 生成完成，长度: {} 字符", response.length());
-        return response;
+        TokenCostService.UsageReservation reservation = tokenCostService.reserveChatRequest(
+                currentProvider(),
+                currentChatModelName(),
+                "chat.generate",
+                fullPrompt,
+                aiProperties.getCostControl().getReservedCompletionTokens()
+        );
+        try {
+            String response = chatLanguageModel.generate(fullPrompt);
+            tokenCostService.recordChatSuccess(reservation, response, null, null);
+            log.info("Chat generation finished, chars={}", response.length());
+            return response;
+        } catch (RuntimeException ex) {
+            tokenCostService.recordFailure(reservation, ex.getMessage());
+            throw ex;
+        }
     }
 
-    /**
-     * 直接调用 DeepSeek API（使用 RestTemplate，支持更多参数控制）
-     */
-    public String chatDirect(String systemPrompt, String userPrompt,
-                              double temperature, int maxTokens) {
+    public String chatDirect(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
         String apiKey = aiProperties.getModel().getDeepseek().getApiKey();
         String baseUrl = aiProperties.getModel().getDeepseek().getBaseUrl();
+        TokenCostService.UsageReservation reservation = tokenCostService.reserveChatRequest(
+                "deepseek",
+                aiProperties.getModel().getDeepseek().getModelName(),
+                "chat.direct",
+                buildPrompt(systemPrompt, userPrompt),
+                maxTokens
+        );
 
         Map<String, Object> requestBody = new java.util.HashMap<>();
         requestBody.put("model", "deepseek-chat");
@@ -75,42 +83,79 @@ public class DeepSeekService {
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
 
-        @SuppressWarnings("unchecked")
-        var response = restTemplate.exchange(
-                baseUrl + "/chat/completions",
-                HttpMethod.POST,
-                entity,
-                Map.class
-        );
+        try {
+            @SuppressWarnings("unchecked")
+            var response = restTemplate.exchange(
+                    baseUrl + "/chat/completions",
+                    HttpMethod.POST,
+                    entity,
+                    Map.class
+            );
 
-        Map<String, Object> body = response.getBody();
-        if (body == null) {
-            throw new RuntimeException("DeepSeek API 返回空响应");
+            Map<String, Object> body = response.getBody();
+            if (body == null) {
+                throw new RuntimeException("DeepSeek API returned empty body");
+            }
+
+            @SuppressWarnings("unchecked")
+            var choices = (List<Map<String, Object>>) body.get("choices");
+            if (choices == null || choices.isEmpty()) {
+                throw new RuntimeException("DeepSeek API returned empty choices");
+            }
+
+            @SuppressWarnings("unchecked")
+            var message = (Map<String, Object>) choices.get(0).get("message");
+            if (message == null) {
+                throw new RuntimeException("DeepSeek API response missing message field");
+            }
+
+            String content = (String) message.get("content");
+            if (content == null) {
+                throw new RuntimeException("DeepSeek API response missing content field");
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> usage = (Map<String, Object>) body.get("usage");
+            tokenCostService.recordChatSuccess(
+                    reservation,
+                    content,
+                    readInt(usage, "prompt_tokens"),
+                    readInt(usage, "completion_tokens")
+            );
+            return content;
+        } catch (RuntimeException ex) {
+            tokenCostService.recordFailure(reservation, ex.getMessage());
+            throw ex;
         }
-
-        @SuppressWarnings("unchecked")
-        var choices = (List<Map<String, Object>>) body.get("choices");
-        if (choices == null || choices.isEmpty()) {
-            throw new RuntimeException("DeepSeek API 返回空的 choices 列表");
-        }
-
-        var message = (Map<String, Object>) choices.get(0).get("message");
-        if (message == null) {
-            throw new RuntimeException("DeepSeek API 返回的消息中缺少 message 字段");
-        }
-
-        String content = (String) message.get("content");
-        if (content == null) {
-            throw new RuntimeException("DeepSeek API 返回的消息中缺少 content 字段");
-        }
-
-        return content;
     }
 
     private String buildPrompt(String systemPrompt, String userPrompt) {
         if (systemPrompt == null || systemPrompt.isEmpty()) {
             return userPrompt;
         }
-        return "【系统指令】\n" + systemPrompt + "\n\n【用户输入】\n" + userPrompt;
+        return "[SYSTEM]\n" + systemPrompt + "\n\n[USER]\n" + userPrompt;
+    }
+
+    private String currentProvider() {
+        return aiProperties.getModel().getProvider();
+    }
+
+    private String currentChatModelName() {
+        return switch (currentProvider()) {
+            case "qianwen" -> aiProperties.getModel().getQianwen().getModelName();
+            case "local" -> aiProperties.getModel().getLocal().getModelName();
+            default -> aiProperties.getModel().getDeepseek().getModelName();
+        };
+    }
+
+    private Integer readInt(Map<String, Object> usage, String field) {
+        if (usage == null) {
+            return null;
+        }
+        Object value = usage.get(field);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        return null;
     }
 }

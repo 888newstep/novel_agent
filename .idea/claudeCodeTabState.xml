@@ -6,11 +6,11 @@
         <entry key="0">
           <value>
             <TabSessionState>
-              <option name="provider" value="claude" />
-              <option name="sessionId" value="26a25efe-4378-45a0-a55a-5b65a98de84e" />
+              <option name="provider" value="codex" />
+              <option name="sessionId" value="019fc760-1f11-77e3-b5bf-236f5115b2e3" />
               <option name="cwd" value="C:\Users\xiaohongfu\IdeaProjects\novel_agent" />
-              <option name="model" value="claude-opus-4-8[1m]" />
-              <option name="permissionMode" value="plan" />
+              <option name="model" value="b-gpt-5.4" />
+              <option name="permissionMode" value="bypassPermissions" />
             </TabSessionState>
           </value>
         </entry>
