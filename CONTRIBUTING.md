@@ -1,4 +1,4 @@
-# Contributing
+﻿# Contributing
 
 Thanks for your interest in improving `Novel Agent`.
 
@@ -7,12 +7,13 @@ Thanks for your interest in improving `Novel Agent`.
 - Search existing issues and pull requests first.
 - Keep changes focused and easy to review.
 - Prefer root-cause fixes over temporary patches.
+- Keep this repository focused on the novel-writing product itself.
 
 ## Local Development
 
 ```bash
 git clone https://github.com/888newstep/novel_agent.git
-cd novel_agent/novel_agent
+cd novel_agent
 ```
 
 Create local configuration:
@@ -25,6 +26,12 @@ Run verification:
 
 ```bash
 mvn test -DskipITs
+```
+
+Start the application:
+
+```bash
+mvn spring-boot:run
 ```
 
 ## Pull Requests
@@ -48,5 +55,5 @@ Use Conventional Commit style when possible:
 
 ## Scope Guidance
 
-- `novel_agent/` focuses on the vertical novel-writing product.
+- This repository focuses on the vertical novel-writing product.
 - Generic agent-platform capabilities should stay out of this repository.

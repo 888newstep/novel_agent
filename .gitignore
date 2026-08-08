@@ -1,13 +1,12 @@
-.idea/
+﻿.idea/
 .vscode/
 *.iml
 .DS_Store
 
-patch.diff
+.env
+target/
+logs/
+*.log
+compile_*.log
 
-novel_agent/.env
-novel_agent/target/
-novel_agent/logs/
-novel_agent/*.log
-novel_agent/compile_*.log
-novel_agent/.vscode/
+patch.diff
