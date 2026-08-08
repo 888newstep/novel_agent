@@ -1,0 +1,13 @@
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+patch.diff
+
+novel_agent/.env
+novel_agent/target/
+novel_agent/logs/
+novel_agent/*.log
+novel_agent/compile_*.log
+novel_agent/.vscode/
