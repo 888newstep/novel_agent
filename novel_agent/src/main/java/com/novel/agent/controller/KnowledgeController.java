@@ -3,11 +3,13 @@ package com.novel.agent.controller;
 import com.novel.agent.service.KnowledgeBatchProcessor;
 import com.novel.agent.service.KnowledgeSearchService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/knowledge")
 @RequiredArgsConstructor
@@ -16,11 +18,9 @@ public class KnowledgeController {
     private final KnowledgeBatchProcessor batchProcessor;
     private final KnowledgeSearchService searchService;
 
-    /**
-     * 触发批量处理所有未处理的 TXT 文件
-     */
     @PostMapping("/process")
     public Map<String, Object> processAll() {
+        log.info("Knowledge batch processing requested");
         KnowledgeBatchProcessor.ProcessResult result = batchProcessor.processAll();
         return Map.of(
                 "success", true,
@@ -31,11 +31,9 @@ public class KnowledgeController {
         );
     }
 
-    /**
-     * 处理单本小说
-     */
     @PostMapping("/process/{fileName}")
     public Map<String, Object> processFile(@PathVariable String fileName) {
+        log.info("Knowledge file processing requested, fileName={}", fileName);
         KnowledgeBatchProcessor.ProcessFileResult result = batchProcessor.processFile(
                 java.nio.file.Paths.get("novels/" + fileName));
         return Map.of(
@@ -46,13 +44,11 @@ public class KnowledgeController {
         );
     }
 
-    /**
-     * 检索外部知识库
-     */
     @GetMapping("/search")
     public Map<String, Object> search(
             @RequestParam String query,
             @RequestParam(defaultValue = "5") int topK) {
+        log.info("Knowledge search requested, query={}, topK={}", query, topK);
         List<KnowledgeSearchService.KnowledgeRef> results = searchService.search(query, topK);
         return Map.of(
                 "success", true,
@@ -61,11 +57,9 @@ public class KnowledgeController {
         );
     }
 
-    /**
-     * 获取外部知识参考（用于注入 Prompt）
-     */
     @GetMapping("/prompt")
     public Map<String, Object> getKnowledgePrompt(@RequestParam String query) {
+        log.info("Knowledge prompt requested, query={}", query);
         String prompt = searchService.buildKnowledgePrompt(query);
         return Map.of(
                 "success", true,
@@ -74,3 +68,4 @@ public class KnowledgeController {
         );
     }
 }
+

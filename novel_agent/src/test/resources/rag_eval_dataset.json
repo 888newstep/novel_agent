@@ -1,0 +1,32 @@
+﻿[
+  {
+    "query": "dragon foreshadowing plot",
+    "expectedKeywords": ["dragon", "foreshadowing"],
+    "category": "plot"
+  },
+  {
+    "query": "hidden clue reveal plot",
+    "expectedKeywords": ["clue", "reveal"],
+    "category": "plot"
+  },
+  {
+    "query": "magic sword artifact",
+    "expectedKeywords": ["sword", "artifact"],
+    "category": "item"
+  },
+  {
+    "query": "spirit ring item trail",
+    "expectedKeywords": ["ring", "item"],
+    "category": "item"
+  },
+  {
+    "query": "mentor relationship tension",
+    "expectedKeywords": ["mentor", "relationship"],
+    "category": "character"
+  },
+  {
+    "query": "rival character conflict",
+    "expectedKeywords": ["rival", "conflict"],
+    "category": "character"
+  }
+]

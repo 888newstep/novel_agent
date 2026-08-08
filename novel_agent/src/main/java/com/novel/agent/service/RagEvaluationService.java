@@ -40,6 +40,11 @@ public class RagEvaluationService {
     /** 最后一次评估报告 */
     private EvaluationReport lastReport;
 
+    /** ??????????? 5 ? */
+    private final Deque<EvaluationSnapshot> reportHistory = new ArrayDeque<>();
+
+    private static final int MAX_HISTORY_SIZE = 5;
+
     @PostConstruct
     public void init() {
         try {
@@ -64,56 +69,49 @@ public class RagEvaluationService {
      */
     public EvaluationReport evaluate(Long novelId, int topK) {
         if (testCases.isEmpty()) {
-            log.warn("测试数据集为空，无法评估");
-            return EvaluationReport.empty("测试数据集为空，请检查 rag_eval_dataset.json");
+            log.warn("RAG evaluation skipped because the test dataset is empty");
+            return EvaluationReport.empty("Test dataset is empty, please check rag_eval_dataset.json");
         }
 
-        log.info("开始 RAG 评估：novel_id={}, topK={}, 测试用例数={}", novelId, topK, testCases.size());
+        log.info("Starting RAG evaluation: novelId={}, topK={}, cases={}", novelId, topK, testCases.size());
 
         List<Double> latencies = new ArrayList<>();
-        int totalRelevant = 0;         // 所有 query 返回的"相关"结果总数
-        int totalRetrieved = 0;        // 所有 query 返回的结果总数（topK * query数）
+        int totalRelevant = 0;
+        int totalRetrieved = 0;
         double mrrSum = 0.0;
         int queriesWithRelevantResult = 0;
         List<QueryResult> detailResults = new ArrayList<>();
 
         for (TestCase tc : testCases) {
-            long start = System.currentTimeMillis();
-
-            // 执行检索
+            long startTime = System.currentTimeMillis();
             List<Map<String, Object>> results = milvusSearchService.searchSegments(novelId, tc.getQuery(), topK);
-
-            long elapsed = System.currentTimeMillis() - start;
+            long elapsed = System.currentTimeMillis() - startTime;
             latencies.add((double) elapsed);
 
-            // 分析结果
-            Set<String> matchedKeywords = new HashSet<>();
+            Set<String> matchedKeywords = new LinkedHashSet<>();
             List<ResultItem> resultItems = new ArrayList<>();
             int firstRelevantRank = -1;
 
             for (int rank = 0; rank < results.size(); rank++) {
                 Map<String, Object> item = results.get(rank);
-                // 判断是否相关（内容包含任一期望关键词）
-                String content = (String) item.getOrDefault("content", "");
+                String content = Objects.toString(item.getOrDefault("content", ""), "");
                 boolean isRelevant = false;
-                Set<String> hitKeywords = new HashSet<>();
-                for (String kw : tc.getExpectedKeywords()) {
-                    if (content.toLowerCase().contains(kw.toLowerCase())) {
+                Set<String> hitKeywords = new LinkedHashSet<>();
+                for (String keyword : tc.getExpectedKeywords()) {
+                    if (content.toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT))) {
                         isRelevant = true;
-                        hitKeywords.add(kw);
-                        matchedKeywords.add(kw);
+                        hitKeywords.add(keyword);
+                        matchedKeywords.add(keyword);
                     }
                 }
                 if (isRelevant && firstRelevantRank == -1) {
-                    firstRelevantRank = rank + 1; // 1-based rank
+                    firstRelevantRank = rank + 1;
                 }
                 resultItems.add(new ResultItem(rank + 1, content, item.get("score"), isRelevant, hitKeywords));
             }
 
-            // 该 query 的指标
             long relevantCount = resultItems.stream().filter(ResultItem::isRelevant).count();
-            boolean hasRelevant = relevantCount > 0;
-            if (hasRelevant) {
+            if (relevantCount > 0) {
                 queriesWithRelevantResult++;
                 mrrSum += 1.0 / firstRelevantRank;
             }
@@ -127,45 +125,72 @@ public class RagEvaluationService {
             ));
         }
 
-        // 聚合指标
         int queryCount = testCases.size();
-        double recallAtK = (double) queriesWithRelevantResult / queryCount * 100;
-        double precisionAtK = (double) totalRelevant / Math.max(totalRetrieved, 1) * 100;
+        double recallAtK = safeRatio(queriesWithRelevantResult, queryCount);
+        double precisionAtK = safeRatio(totalRelevant, totalRetrieved);
         double mrr = mrrSum / Math.max(queryCount, 1);
         double avgLatency = latencies.stream().mapToDouble(d -> d).average().orElse(0);
         double p99Latency = computeP99(latencies);
         double minLatency = latencies.stream().mapToDouble(d -> d).min().orElse(0);
         double maxLatency = latencies.stream().mapToDouble(d -> d).max().orElse(0);
 
-        // 关键词覆盖率：所有 query 中匹配到的关键词占全部关键词的比例
         long totalKeywords = testCases.stream()
                 .mapToLong(tc -> tc.getExpectedKeywords().size())
                 .sum();
         long totalMatchedKeywords = detailResults.stream()
                 .mapToLong(qr -> qr.getMatchedKeywords().size())
                 .sum();
-        double keywordCoverage = (double) totalMatchedKeywords / Math.max(totalKeywords, 1) * 100;
+        double keywordCoverage = safeRatio(totalMatchedKeywords, totalKeywords);
+
+        List<CategorySummary> categorySummaries = buildCategorySummaries(detailResults);
+        EvaluationSnapshot previousSnapshot = reportHistory.peekLast();
+        EvaluationSnapshot currentSnapshot = new EvaluationSnapshot(
+                System.currentTimeMillis(),
+                queryCount,
+                topK,
+                recallAtK,
+                precisionAtK,
+                mrr,
+                avgLatency,
+                p99Latency,
+                keywordCoverage,
+                queriesWithRelevantResult
+        );
+        EvaluationComparison comparison = buildComparison(previousSnapshot, currentSnapshot);
 
         lastReport = new EvaluationReport(
-                System.currentTimeMillis(),
+                currentSnapshot.getTimestamp(),
                 queryCount, topK, recallAtK, precisionAtK, mrr,
                 avgLatency, p99Latency, minLatency, maxLatency,
                 keywordCoverage, queriesWithRelevantResult, detailResults
         );
+        lastReport.setCategorySummaries(categorySummaries);
+        lastReport.setComparison(comparison);
 
-        log.info("RAG 评估完成：Recall@{}={}%, Precision@{}={}%, MRR={}, 平均延迟={}ms, P99={}ms",
-                topK, String.format("%.1f", recallAtK),
-                topK, String.format("%.1f", precisionAtK),
-                String.format("%.3f", mrr),
-                String.format("%.0f", avgLatency),
-                String.format("%.0f", p99Latency));
+        addHistorySnapshot(currentSnapshot);
+        lastReport.setHistory(new ArrayList<>(reportHistory));
+
+        if (comparison != null) {
+            log.info("RAG evaluation completed: Recall@{}={}%, Precision@{}={}%, MRR={}, Avg={}ms, P99={}ms, vs previous deltaRecall={}pp, deltaMRR={}",
+                    topK, String.format(Locale.ROOT, "%.1f", recallAtK),
+                    topK, String.format(Locale.ROOT, "%.1f", precisionAtK),
+                    String.format(Locale.ROOT, "%.3f", mrr),
+                    String.format(Locale.ROOT, "%.0f", avgLatency),
+                    String.format(Locale.ROOT, "%.0f", p99Latency),
+                    String.format(Locale.ROOT, "%.1f", comparison.getRecallAtKDelta()),
+                    String.format(Locale.ROOT, "%.3f", comparison.getMrrDelta()));
+        } else {
+            log.info("RAG evaluation completed: Recall@{}={}%, Precision@{}={}%, MRR={}, Avg={}ms, P99={}ms",
+                    topK, String.format(Locale.ROOT, "%.1f", recallAtK),
+                    topK, String.format(Locale.ROOT, "%.1f", precisionAtK),
+                    String.format(Locale.ROOT, "%.3f", mrr),
+                    String.format(Locale.ROOT, "%.0f", avgLatency),
+                    String.format(Locale.ROOT, "%.0f", p99Latency));
+        }
 
         return lastReport;
     }
 
-    /**
-     * 获取最后一次评估报告
-     */
     public EvaluationReport getLastReport() {
         return lastReport;
     }
@@ -188,6 +213,95 @@ public class RagEvaluationService {
     // =============================================
     // 内部类：测试用例
     // =============================================
+
+    private double safeRatio(long numerator, long denominator) {
+        if (denominator <= 0) {
+            return 0D;
+        }
+        return (double) numerator / denominator * 100D;
+    }
+
+    private List<CategorySummary> buildCategorySummaries(List<QueryResult> detailResults) {
+        if (detailResults.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, List<QueryResult>> grouped = detailResults.stream()
+                .collect(Collectors.groupingBy(
+                        result -> normalizeCategory(result.getCategory()),
+                        LinkedHashMap::new,
+                        Collectors.toList()));
+
+        return grouped.entrySet().stream()
+                .map(entry -> buildCategorySummary(entry.getKey(), entry.getValue()))
+                .sorted(Comparator.comparingInt(CategorySummary::getQueryCount).reversed()
+                        .thenComparing(CategorySummary::getCategory))
+                .collect(Collectors.toList());
+    }
+
+    private CategorySummary buildCategorySummary(String category, List<QueryResult> results) {
+        int queryCount = results.size();
+        long queriesWithRelevantResult = results.stream().filter(result -> result.getRelevantCount() > 0).count();
+        long totalRelevant = results.stream().mapToLong(QueryResult::getRelevantCount).sum();
+        long totalRetrieved = results.stream().mapToInt(QueryResult::getResultCount).sum();
+        double reciprocalRankSum = results.stream()
+                .mapToDouble(result -> result.getFirstRelevantRank() > 0 ? 1D / result.getFirstRelevantRank() : 0D)
+                .sum();
+        double avgLatency = results.stream().mapToLong(QueryResult::getLatencyMs).average().orElse(0D);
+        double p99Latency = computeP99(results.stream().map(result -> (double) result.getLatencyMs()).collect(Collectors.toList()));
+        long totalKeywords = results.stream().mapToLong(result -> result.getExpectedKeywords().size()).sum();
+        long matchedKeywords = results.stream().mapToLong(result -> result.getMatchedKeywords().size()).sum();
+
+        return new CategorySummary(
+                category,
+                queryCount,
+                (int) queriesWithRelevantResult,
+                safeRatio(queriesWithRelevantResult, queryCount),
+                safeRatio(totalRelevant, totalRetrieved),
+                reciprocalRankSum / Math.max(queryCount, 1),
+                avgLatency,
+                p99Latency,
+                safeRatio(matchedKeywords, totalKeywords)
+        );
+    }
+
+    private EvaluationComparison buildComparison(EvaluationSnapshot previous, EvaluationSnapshot current) {
+        if (previous == null || current == null) {
+            return null;
+        }
+
+        return new EvaluationComparison(
+                previous.getTimestamp(),
+                previous.getTopK(),
+                current.getTopK(),
+                current.getQueryCount() - previous.getQueryCount(),
+                current.getQueriesWithRelevantResult() - previous.getQueriesWithRelevantResult(),
+                round(current.getRecallAtK() - previous.getRecallAtK()),
+                round(current.getPrecisionAtK() - previous.getPrecisionAtK()),
+                round(current.getMrr() - previous.getMrr()),
+                round(current.getAvgLatencyMs() - previous.getAvgLatencyMs()),
+                round(current.getP99LatencyMs() - previous.getP99LatencyMs()),
+                round(current.getKeywordCoverage() - previous.getKeywordCoverage())
+        );
+    }
+
+    private void addHistorySnapshot(EvaluationSnapshot snapshot) {
+        reportHistory.addLast(snapshot);
+        while (reportHistory.size() > MAX_HISTORY_SIZE) {
+            reportHistory.removeFirst();
+        }
+    }
+
+    private String normalizeCategory(String category) {
+        if (category == null || category.isBlank()) {
+            return "uncategorized";
+        }
+        return category.trim();
+    }
+
+    private double round(double value) {
+        return Math.round(value * 1000D) / 1000D;
+    }
 
     public static class TestCase {
         private String query;
@@ -219,9 +333,12 @@ public class RagEvaluationService {
         private double p99LatencyMs;
         private double minLatencyMs;
         private double maxLatencyMs;
-        private double keywordCoverage; // 关键词覆盖率 (%)
+        private double keywordCoverage; // ?????? (%)
         private int queriesWithRelevantResult;
         private List<QueryResult> details;
+        private List<CategorySummary> categorySummaries;
+        private EvaluationComparison comparison;
+        private List<EvaluationSnapshot> history;
 
         public EvaluationReport() {}
 
@@ -261,10 +378,12 @@ public class RagEvaluationService {
             r.keywordCoverage = 0;
             r.queriesWithRelevantResult = 0;
             r.details = Collections.emptyList();
+            r.categorySummaries = Collections.emptyList();
+            r.comparison = null;
+            r.history = Collections.emptyList();
             return r;
         }
 
-        // getters
         public long getTimestamp() { return timestamp; }
         public int getQueryCount() { return queryCount; }
         public int getTopK() { return topK; }
@@ -278,11 +397,147 @@ public class RagEvaluationService {
         public double getKeywordCoverage() { return keywordCoverage; }
         public int getQueriesWithRelevantResult() { return queriesWithRelevantResult; }
         public List<QueryResult> getDetails() { return details; }
+        public List<CategorySummary> getCategorySummaries() { return categorySummaries; }
+        public EvaluationComparison getComparison() { return comparison; }
+        public List<EvaluationSnapshot> getHistory() { return history; }
+
+        public void setCategorySummaries(List<CategorySummary> categorySummaries) {
+            this.categorySummaries = categorySummaries;
+        }
+
+        public void setComparison(EvaluationComparison comparison) {
+            this.comparison = comparison;
+        }
+
+        public void setHistory(List<EvaluationSnapshot> history) {
+            this.history = history;
+        }
     }
 
-    // =============================================
-    // 内部类：单条 query 结果
-    // =============================================
+    public static class CategorySummary {
+        private String category;
+        private int queryCount;
+        private int queriesWithRelevantResult;
+        private double recallAtK;
+        private double precisionAtK;
+        private double mrr;
+        private double avgLatencyMs;
+        private double p99LatencyMs;
+        private double keywordCoverage;
+
+        public CategorySummary() {}
+
+        public CategorySummary(String category, int queryCount, int queriesWithRelevantResult,
+                               double recallAtK, double precisionAtK, double mrr,
+                               double avgLatencyMs, double p99LatencyMs, double keywordCoverage) {
+            this.category = category;
+            this.queryCount = queryCount;
+            this.queriesWithRelevantResult = queriesWithRelevantResult;
+            this.recallAtK = recallAtK;
+            this.precisionAtK = precisionAtK;
+            this.mrr = mrr;
+            this.avgLatencyMs = avgLatencyMs;
+            this.p99LatencyMs = p99LatencyMs;
+            this.keywordCoverage = keywordCoverage;
+        }
+
+        public String getCategory() { return category; }
+        public int getQueryCount() { return queryCount; }
+        public int getQueriesWithRelevantResult() { return queriesWithRelevantResult; }
+        public double getRecallAtK() { return recallAtK; }
+        public double getPrecisionAtK() { return precisionAtK; }
+        public double getMrr() { return mrr; }
+        public double getAvgLatencyMs() { return avgLatencyMs; }
+        public double getP99LatencyMs() { return p99LatencyMs; }
+        public double getKeywordCoverage() { return keywordCoverage; }
+    }
+
+    public static class EvaluationSnapshot {
+        private long timestamp;
+        private int queryCount;
+        private int topK;
+        private double recallAtK;
+        private double precisionAtK;
+        private double mrr;
+        private double avgLatencyMs;
+        private double p99LatencyMs;
+        private double keywordCoverage;
+        private int queriesWithRelevantResult;
+
+        public EvaluationSnapshot() {}
+
+        public EvaluationSnapshot(long timestamp, int queryCount, int topK,
+                                  double recallAtK, double precisionAtK, double mrr,
+                                  double avgLatencyMs, double p99LatencyMs,
+                                  double keywordCoverage, int queriesWithRelevantResult) {
+            this.timestamp = timestamp;
+            this.queryCount = queryCount;
+            this.topK = topK;
+            this.recallAtK = recallAtK;
+            this.precisionAtK = precisionAtK;
+            this.mrr = mrr;
+            this.avgLatencyMs = avgLatencyMs;
+            this.p99LatencyMs = p99LatencyMs;
+            this.keywordCoverage = keywordCoverage;
+            this.queriesWithRelevantResult = queriesWithRelevantResult;
+        }
+
+        public long getTimestamp() { return timestamp; }
+        public int getQueryCount() { return queryCount; }
+        public int getTopK() { return topK; }
+        public double getRecallAtK() { return recallAtK; }
+        public double getPrecisionAtK() { return precisionAtK; }
+        public double getMrr() { return mrr; }
+        public double getAvgLatencyMs() { return avgLatencyMs; }
+        public double getP99LatencyMs() { return p99LatencyMs; }
+        public double getKeywordCoverage() { return keywordCoverage; }
+        public int getQueriesWithRelevantResult() { return queriesWithRelevantResult; }
+    }
+
+    public static class EvaluationComparison {
+        private long baselineTimestamp;
+        private int baselineTopK;
+        private int currentTopK;
+        private int queryCountDelta;
+        private int queriesWithRelevantResultDelta;
+        private double recallAtKDelta;
+        private double precisionAtKDelta;
+        private double mrrDelta;
+        private double avgLatencyMsDelta;
+        private double p99LatencyMsDelta;
+        private double keywordCoverageDelta;
+
+        public EvaluationComparison() {}
+
+        public EvaluationComparison(long baselineTimestamp, int baselineTopK, int currentTopK,
+                                    int queryCountDelta, int queriesWithRelevantResultDelta,
+                                    double recallAtKDelta, double precisionAtKDelta, double mrrDelta,
+                                    double avgLatencyMsDelta, double p99LatencyMsDelta, double keywordCoverageDelta) {
+            this.baselineTimestamp = baselineTimestamp;
+            this.baselineTopK = baselineTopK;
+            this.currentTopK = currentTopK;
+            this.queryCountDelta = queryCountDelta;
+            this.queriesWithRelevantResultDelta = queriesWithRelevantResultDelta;
+            this.recallAtKDelta = recallAtKDelta;
+            this.precisionAtKDelta = precisionAtKDelta;
+            this.mrrDelta = mrrDelta;
+            this.avgLatencyMsDelta = avgLatencyMsDelta;
+            this.p99LatencyMsDelta = p99LatencyMsDelta;
+            this.keywordCoverageDelta = keywordCoverageDelta;
+        }
+
+        public long getBaselineTimestamp() { return baselineTimestamp; }
+        public int getBaselineTopK() { return baselineTopK; }
+        public int getCurrentTopK() { return currentTopK; }
+        public int getQueryCountDelta() { return queryCountDelta; }
+        public int getQueriesWithRelevantResultDelta() { return queriesWithRelevantResultDelta; }
+        public double getRecallAtKDelta() { return recallAtKDelta; }
+        public double getPrecisionAtKDelta() { return precisionAtKDelta; }
+        public double getMrrDelta() { return mrrDelta; }
+        public double getAvgLatencyMsDelta() { return avgLatencyMsDelta; }
+        public double getP99LatencyMsDelta() { return p99LatencyMsDelta; }
+        public double getKeywordCoverageDelta() { return keywordCoverageDelta; }
+    }
 
     public static class QueryResult {
         private String query;

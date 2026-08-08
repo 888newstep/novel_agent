@@ -5,10 +5,12 @@ import dev.langchain4j.model.chat.ChatLanguageModel;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -59,6 +61,7 @@ public class DeepSeekService {
     public String chatDirect(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
         String apiKey = aiProperties.getModel().getDeepseek().getApiKey();
         String baseUrl = aiProperties.getModel().getDeepseek().getBaseUrl();
+        String modelName = aiProperties.getModel().getDeepseek().getModelName();
         TokenCostService.UsageReservation reservation = tokenCostService.reserveChatRequest(
                 "deepseek",
                 aiProperties.getModel().getDeepseek().getModelName(),
@@ -68,7 +71,7 @@ public class DeepSeekService {
         );
 
         Map<String, Object> requestBody = new java.util.HashMap<>();
-        requestBody.put("model", "deepseek-chat");
+        requestBody.put("model", modelName);
         requestBody.put("messages", List.of(
                 Map.of("role", "system", "content", systemPrompt),
                 Map.of("role", "user", "content", userPrompt)
@@ -85,11 +88,11 @@ public class DeepSeekService {
 
         try {
             @SuppressWarnings("unchecked")
-            var response = restTemplate.exchange(
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     baseUrl + "/chat/completions",
                     HttpMethod.POST,
                     entity,
-                    Map.class
+                    new ParameterizedTypeReference<>() {}
             );
 
             Map<String, Object> body = response.getBody();

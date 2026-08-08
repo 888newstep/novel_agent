@@ -109,3 +109,35 @@ logging:
 knowledge:
   novel-dir: novels/           # TXT 小说存放目录
   batch-size: 10               # 批量处理大小
+
+retrieval:
+  search:
+    ef-search: 64
+    default-fetch-multiplier: 2
+    max-query-variants: 3
+    per-chapter-segment-limit: 1
+    per-chapter-event-limit: 1
+  memory:
+    recent-chapter-limit: 3
+    segment-limit: 3
+    hook-limit: 2
+    character-limit: 3
+    item-limit: 1
+    faction-limit: 1
+    relation-limit: 2
+  ranking:
+    keyword-hit-weight: 0.10
+    variant-hit-weight: 0.06
+    primary-field-keyword-hit-weight: 0.14
+    primary-field-exact-match-bonus: 0.20
+    unresolved-event-bonus: 0.18
+    plot-hook-bonus: 0.10
+    exact-match-bonus: 0.16
+    recency-max-boost: 0.12
+  hints:
+    segment: 章节片段 续写 上下文
+    event: 事件 伏笔 设定
+    character: 人物 关系 设定
+    item: 道具 状态 归属
+    faction: 势力 灵感 设定
+    current-chapter: 当前章节 上下文 续写

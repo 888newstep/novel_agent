@@ -5,6 +5,7 @@ import com.novel.agent.entity.KeyEvent;
 import com.novel.agent.entity.Relation;
 import com.novel.agent.repository.ChapterRepository;
 import com.novel.agent.repository.KeyEventRepository;
+import com.novel.agent.config.RetrievalProperties;
 import com.novel.agent.repository.RelationRepository;
 import io.milvus.v2.client.MilvusClientV2;
 import io.milvus.v2.service.vector.request.SearchReq;
@@ -33,24 +34,12 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class MilvusSearchService {
 
-    private static final Map<String, Object> SEARCH_PARAMS = Map.of("ef_search", 64);
-    private static final int DEFAULT_FETCH_MULTIPLIER = 2;
-    private static final int MAX_QUERY_VARIANTS = 3;
-    private static final int RECENT_CHAPTER_LIMIT = 3;
-    private static final int MEMORY_SEGMENT_LIMIT = 3;
-    private static final int MEMORY_HOOK_LIMIT = 2;
-    private static final int MEMORY_CHARACTER_LIMIT = 3;
-    private static final int MEMORY_ITEM_LIMIT = 1;
-    private static final int MEMORY_FACTION_LIMIT = 1;
-    private static final int MEMORY_RELATION_LIMIT = 2;
-    private static final int PER_CHAPTER_SEGMENT_LIMIT = 1;
-    private static final int PER_CHAPTER_EVENT_LIMIT = 1;
-
     private final MilvusClientV2 milvusClient;
     private final EmbeddingService embeddingService;
     private final ChapterRepository chapterRepository;
     private final KeyEventRepository keyEventRepository;
     private final RelationRepository relationRepository;
+    private final RetrievalProperties retrievalProperties;
 
     public List<Map<String, Object>> searchSegments(Long novelId, String queryText, int topK) {
         return searchSegments(novelId, queryText, topK, null);
@@ -63,13 +52,13 @@ public class MilvusSearchService {
                 List.of("chapter_num", "segment_type", "content"),
                 topK,
                 queryText,
-                "?? ?? ?? ??",
+                retrievalProperties.getHints().getSegment(),
                 "content",
                 List.of("content"),
                 true,
                 currentChapterNum,
                 true,
-                PER_CHAPTER_SEGMENT_LIMIT
+                retrievalProperties.getSearch().getPerChapterSegmentLimit()
         );
     }
 
@@ -78,20 +67,10 @@ public class MilvusSearchService {
     }
 
     public List<Map<String, Object>> searchEvents(Long novelId, String queryText, int topK, Integer currentChapterNum) {
-        return hybridSearch(
-                "novel_events",
-                "novel_id == " + novelId,
-                List.of("mysql_event_id", "chapter_num", "event_type", "title", "description"),
-                topK,
-                queryText,
-                "?? ?? ?? ??",
-                "mysql_event_id",
-                List.of("title", "description"),
-                true,
-                currentChapterNum,
-                true,
-                PER_CHAPTER_EVENT_LIMIT
-        );
+        Set<Long> unresolvedIds = keyEventRepository.findByNovelIdAndResolvedFalse(novelId).stream()
+                .map(KeyEvent::getId)
+                .collect(Collectors.toSet());
+        return searchEventsInternal(novelId, queryText, topK, currentChapterNum, unresolvedIds);
     }
 
     public List<Map<String, Object>> searchUnresolvedEvents(Long novelId, String queryText, int topK) {
@@ -107,10 +86,32 @@ public class MilvusSearchService {
             return List.of();
         }
 
-        return searchEvents(novelId, queryText, Math.max(topK + 1, topK * 2), currentChapterNum).stream()
+        return searchEventsInternal(novelId, queryText, Math.max(topK + 1, topK * 2), currentChapterNum, unresolvedIds).stream()
                 .filter(item -> unresolvedIds.contains(asLong(item.get("mysql_event_id"))))
                 .limit(topK)
                 .collect(Collectors.toList());
+    }
+
+    private List<Map<String, Object>> searchEventsInternal(Long novelId,
+                                                           String queryText,
+                                                           int topK,
+                                                           Integer currentChapterNum,
+                                                           Set<Long> unresolvedIds) {
+        List<Map<String, Object>> results = hybridSearch(
+                "novel_events",
+                "novel_id == " + novelId,
+                List.of("mysql_event_id", "chapter_num", "event_type", "title", "description"),
+                topK,
+                queryText,
+                retrievalProperties.getHints().getEvent(),
+                "mysql_event_id",
+                List.of("title", "description"),
+                true,
+                currentChapterNum,
+                true,
+                retrievalProperties.getSearch().getPerChapterEventLimit()
+        );
+        return prioritizeEventResults(results, unresolvedIds);
     }
 
     public List<Map<String, Object>> searchCharacters(Long novelId, String queryText, int topK) {
@@ -120,7 +121,7 @@ public class MilvusSearchService {
                 List.of("mysql_char_id", "name", "char_text"),
                 topK,
                 queryText,
-                "?? ?? ?? ??",
+                retrievalProperties.getHints().getCharacter(),
                 "mysql_char_id",
                 List.of("name", "char_text"),
                 false,
@@ -142,7 +143,7 @@ public class MilvusSearchService {
                 List.of("mysql_item_id", "item_type", "name", "item_text"),
                 topK,
                 queryText,
-                "?? ?? ?? ??",
+                retrievalProperties.getHints().getItem(),
                 "mysql_item_id",
                 List.of("name", "item_text"),
                 false,
@@ -164,7 +165,7 @@ public class MilvusSearchService {
                 List.of("mysql_ref_id", "source_type", "title", "content"),
                 topK,
                 queryText,
-                "?? ?? ?? ??",
+                retrievalProperties.getHints().getFaction(),
                 "mysql_ref_id",
                 List.of("title", "content"),
                 false,
@@ -179,31 +180,31 @@ public class MilvusSearchService {
     }
 
     public WritingMemory buildWritingMemory(Long novelId, String queryText, Integer currentChapterNum) {
-        List<Map<String, Object>> recentChapters = loadRecentChapters(novelId, currentChapterNum, RECENT_CHAPTER_LIMIT);
-        List<Map<String, Object>> segments = searchSegments(novelId, queryText, MEMORY_SEGMENT_LIMIT + 1, currentChapterNum);
-        List<Map<String, Object>> hooks = searchUnresolvedEvents(novelId, queryText, MEMORY_HOOK_LIMIT + 1, currentChapterNum);
-        List<Map<String, Object>> characters = searchCharacters(novelId, queryText, MEMORY_CHARACTER_LIMIT);
-        List<Map<String, Object>> items = searchItems(novelId, queryText, MEMORY_ITEM_LIMIT + 1, null);
-        List<Map<String, Object>> factions = searchFactionOrInspiration(novelId, queryText, MEMORY_FACTION_LIMIT + 1, 0);
-        List<Map<String, Object>> relations = loadRelatedRelations(novelId, queryText, characters, MEMORY_RELATION_LIMIT);
+        List<Map<String, Object>> recentChapters = loadRecentChapters(novelId, currentChapterNum, retrievalProperties.getMemory().getRecentChapterLimit());
+        List<Map<String, Object>> segments = searchSegments(novelId, queryText, retrievalProperties.getMemory().getSegmentLimit() + 1, currentChapterNum);
+        List<Map<String, Object>> hooks = searchUnresolvedEvents(novelId, queryText, retrievalProperties.getMemory().getHookLimit() + 1, currentChapterNum);
+        List<Map<String, Object>> characters = searchCharacters(novelId, queryText, retrievalProperties.getMemory().getCharacterLimit());
+        List<Map<String, Object>> items = searchItems(novelId, queryText, retrievalProperties.getMemory().getItemLimit() + 1, null);
+        List<Map<String, Object>> factions = searchFactionOrInspiration(novelId, queryText, retrievalProperties.getMemory().getFactionLimit() + 1, 0);
+        List<Map<String, Object>> relations = loadRelatedRelations(novelId, queryText, characters, retrievalProperties.getMemory().getRelationLimit());
 
         return WritingMemory.builder()
                 .query(queryText)
                 .currentChapterNum(currentChapterNum)
-                .recentChapters(limitResults(recentChapters, RECENT_CHAPTER_LIMIT))
-                .segments(limitResults(segments, MEMORY_SEGMENT_LIMIT))
-                .hooks(limitResults(hooks, MEMORY_HOOK_LIMIT))
-                .characters(limitResults(characters, MEMORY_CHARACTER_LIMIT))
-                .items(limitResults(items, MEMORY_ITEM_LIMIT))
-                .factions(limitResults(factions, MEMORY_FACTION_LIMIT))
-                .relations(limitResults(relations, MEMORY_RELATION_LIMIT))
-                .totalCount(Math.min(recentChapters.size(), RECENT_CHAPTER_LIMIT)
-                        + Math.min(segments.size(), MEMORY_SEGMENT_LIMIT)
-                        + Math.min(hooks.size(), MEMORY_HOOK_LIMIT)
-                        + Math.min(characters.size(), MEMORY_CHARACTER_LIMIT)
-                        + Math.min(items.size(), MEMORY_ITEM_LIMIT)
-                        + Math.min(factions.size(), MEMORY_FACTION_LIMIT)
-                        + Math.min(relations.size(), MEMORY_RELATION_LIMIT))
+                .recentChapters(limitResults(recentChapters, retrievalProperties.getMemory().getRecentChapterLimit()))
+                .segments(limitResults(segments, retrievalProperties.getMemory().getSegmentLimit()))
+                .hooks(limitResults(hooks, retrievalProperties.getMemory().getHookLimit()))
+                .characters(limitResults(characters, retrievalProperties.getMemory().getCharacterLimit()))
+                .items(limitResults(items, retrievalProperties.getMemory().getItemLimit()))
+                .factions(limitResults(factions, retrievalProperties.getMemory().getFactionLimit()))
+                .relations(limitResults(relations, retrievalProperties.getMemory().getRelationLimit()))
+                .totalCount(Math.min(recentChapters.size(), retrievalProperties.getMemory().getRecentChapterLimit())
+                        + Math.min(segments.size(), retrievalProperties.getMemory().getSegmentLimit())
+                        + Math.min(hooks.size(), retrievalProperties.getMemory().getHookLimit())
+                        + Math.min(characters.size(), retrievalProperties.getMemory().getCharacterLimit())
+                        + Math.min(items.size(), retrievalProperties.getMemory().getItemLimit())
+                        + Math.min(factions.size(), retrievalProperties.getMemory().getFactionLimit())
+                        + Math.min(relations.size(), retrievalProperties.getMemory().getRelationLimit()))
                 .build();
     }
 
@@ -221,7 +222,7 @@ public class MilvusSearchService {
                                                    int perChapterLimit) {
         List<String> queryVariants = buildQueryVariants(queryText, expansionHint, currentChapterNum);
         List<List<Float>> queryVectors = embeddingService.batchGenerateEmbedding(queryVariants);
-        int fetchK = Math.max(topK * DEFAULT_FETCH_MULTIPLIER, topK + 2);
+        int fetchK = Math.max(topK * retrievalProperties.getSearch().getDefaultFetchMultiplier(), topK + 2);
         Map<String, Map<String, Object>> merged = new LinkedHashMap<>();
 
         for (int i = 0; i < queryVariants.size(); i++) {
@@ -272,16 +273,75 @@ public class MilvusSearchService {
             double chapterBoost = computeChapterProximityBoost(chapterNum, currentChapterNum, chapterAware);
             int chapterDistance = getChapterDistance(chapterNum, currentChapterNum);
 
-            double rankScore = asDouble(item.get("score"));
-            rankScore += keywordHits * 0.10;
-            rankScore += hitQueries.size() * 0.06;
-            rankScore += chapterBoost;
+            double baseScore = asDouble(item.get("score"));
+            double rankScore = baseScore;
+            List<String> reasons = new ArrayList<>();
+            reasons.add("base_score=" + round(baseScore));
+
+            double keywordBoost = 0D;
+            double variantBoost = 0D;
+            double exactMatchBoost = 0D;
+            double primaryFieldBoost = 0D;
+            double recencyBoost = 0D;
+
+            if (keywordHits > 0) {
+                keywordBoost = keywordHits * retrievalProperties.getRanking().getKeywordHitWeight();
+                rankScore += keywordBoost;
+                reasons.add("keyword_hits=" + keywordHits);
+            }
+            if (!hitQueries.isEmpty()) {
+                variantBoost = hitQueries.size() * retrievalProperties.getRanking().getVariantHitWeight();
+                rankScore += variantBoost;
+                reasons.add("variant_hits=" + hitQueries.size());
+            }
+            if (chapterBoost > 0) {
+                rankScore += chapterBoost;
+                reasons.add("chapter_boost=" + round(chapterBoost));
+            }
             if (!normalizedQuery.isBlank() && combinedText.contains(normalizedQuery)) {
-                rankScore += 0.16;
+                exactMatchBoost = retrievalProperties.getRanking().getExactMatchBonus();
+                rankScore += exactMatchBoost;
+                reasons.add("exact_query_match");
             }
+            Map<String, Object> primaryFieldSignals = new LinkedHashMap<>();
+            primaryFieldBoost = applyPrimaryFieldSignals(collectionName, item, keywords, normalizedQuery, reasons, primaryFieldSignals);
+            rankScore += primaryFieldBoost;
             if (recencyAware && currentChapterNum == null && maxChapterNum > 0) {
-                rankScore += Math.min(0.12, chapterNum / (double) maxChapterNum * 0.12);
+                recencyBoost = Math.min(retrievalProperties.getRanking().getRecencyMaxBoost(), chapterNum / (double) maxChapterNum * retrievalProperties.getRanking().getRecencyMaxBoost());
+                if (recencyBoost > 0) {
+                    rankScore += recencyBoost;
+                    reasons.add("recency_boost=" + round(recencyBoost));
+                }
             }
+            if (chapterAware && currentChapterNum != null && chapterDistance >= 0) {
+                reasons.add("chapter_distance=" + chapterDistance);
+            }
+
+            Map<String, Object> scoreBreakdown = new LinkedHashMap<>();
+            scoreBreakdown.put("baseScore", round(baseScore));
+            scoreBreakdown.put("keywordBoost", round(keywordBoost));
+            scoreBreakdown.put("variantBoost", round(variantBoost));
+            scoreBreakdown.put("chapterBoost", round(chapterBoost));
+            scoreBreakdown.put("exactMatchBoost", round(exactMatchBoost));
+            scoreBreakdown.put("primaryFieldBoost", round(primaryFieldBoost));
+            scoreBreakdown.put("recencyBoost", round(recencyBoost));
+            scoreBreakdown.put("finalScore", round(rankScore));
+
+            Map<String, Object> recallTrace = new LinkedHashMap<>();
+            recallTrace.put("query", queryText == null ? "" : queryText);
+            recallTrace.put("currentChapterNum", currentChapterNum);
+            recallTrace.put("chapterAware", chapterAware);
+            recallTrace.put("matchedQueryVariants", List.copyOf(hitQueries));
+            recallTrace.put("queryHits", hitQueries.size());
+            recallTrace.put("keywordHits", keywordHits);
+            recallTrace.put("rankingSignals", List.copyOf(reasons));
+            if (chapterDistance >= 0) {
+                recallTrace.put("chapterDistance", chapterDistance);
+            }
+            if (!primaryFieldSignals.isEmpty()) {
+                recallTrace.put("primaryFieldSignals", primaryFieldSignals);
+            }
+            recallTrace.put("scoreBreakdown", scoreBreakdown);
 
             item.put("rankScore", round(rankScore));
             item.put("queryHits", hitQueries.size());
@@ -290,20 +350,160 @@ public class MilvusSearchService {
                 item.put("chapterDistance", chapterDistance);
                 item.put("chapterProximityBoost", round(chapterBoost));
             }
+            item.put("matchReasons", List.copyOf(reasons));
+            item.put("rankExplanation", String.join(" | ", reasons));
+            item.put("recallTrace", recallTrace);
             item.remove("_hitQueries");
         }
 
-        candidates.sort(Comparator
-                .comparingDouble((Map<String, Object> item) -> asDouble(item.get("rankScore"))).reversed()
-                .thenComparingDouble(item -> asDouble(item.get("score"))).reversed());
+        candidates.sort(rankComparator());
 
         List<Map<String, Object>> limited = perChapterLimit > 0
                 ? limitByChapter(candidates, topK, perChapterLimit)
                 : limitResults(candidates, topK);
 
-        log.info("search [{}] query=[{}], chapter={}, variants={}, results={}",
-                collectionName, queryText, currentChapterNum, queryVariants.size(), limited.size());
+        log.info("search [{}] query=[{}], chapter={}, variants={}, results={}, topScore={}",
+                collectionName,
+                queryText,
+                currentChapterNum,
+                queryVariants.size(),
+                limited.size(),
+                limited.isEmpty() ? 0D : asDouble(limited.get(0).get("rankScore")));
         return limited;
+    }
+
+    private Comparator<Map<String, Object>> rankComparator() {
+        return Comparator
+                .comparingDouble((Map<String, Object> item) -> asDouble(item.get("rankScore"))).reversed()
+                .thenComparing(Comparator.comparingDouble((Map<String, Object> item) -> asDouble(item.get("score"))).reversed())
+                .thenComparingInt(item -> {
+                    int chapterDistance = asInt(item.get("chapterDistance"));
+                    return chapterDistance < 0 ? Integer.MAX_VALUE : chapterDistance;
+                })
+                .thenComparing(Comparator.comparingLong((Map<String, Object> item) -> asLong(item.get("chapter_num"))).reversed());
+    }
+
+    private double applyPrimaryFieldSignals(String collectionName,
+                                            Map<String, Object> item,
+                                            List<String> keywords,
+                                            String normalizedQuery,
+                                            List<String> reasons,
+                                            Map<String, Object> primaryFieldSignals) {
+        String primaryField = resolvePrimaryField(collectionName);
+        if (primaryField == null) {
+            primaryFieldSignals.put("boost", 0D);
+            return 0D;
+        }
+
+        String primaryText = safeLower(Objects.toString(item.get(primaryField), ""));
+        primaryFieldSignals.put("field", primaryField);
+        if (primaryText.isBlank()) {
+            primaryFieldSignals.put("keywordHits", 0);
+            primaryFieldSignals.put("exactMatch", false);
+            primaryFieldSignals.put("boost", 0D);
+            return 0D;
+        }
+
+        double boost = 0D;
+        int primaryKeywordHits = countKeywordHits(primaryText, keywords);
+        primaryFieldSignals.put("keywordHits", primaryKeywordHits);
+        if (primaryKeywordHits > 0) {
+            double keywordBoost = primaryKeywordHits * retrievalProperties.getRanking().getPrimaryFieldKeywordHitWeight();
+            boost += keywordBoost;
+            reasons.add(primaryField + "_keyword_hits=" + primaryKeywordHits);
+        }
+
+        boolean exactMatch = !normalizedQuery.isBlank() && primaryText.contains(normalizedQuery);
+        primaryFieldSignals.put("exactMatch", exactMatch);
+        if (exactMatch) {
+            boost += retrievalProperties.getRanking().getPrimaryFieldExactMatchBonus();
+            reasons.add(primaryField + "_exact_match");
+        }
+
+        primaryFieldSignals.put("boost", round(boost));
+
+        return boost;
+    }
+
+    private List<Map<String, Object>> prioritizeEventResults(List<Map<String, Object>> results, Set<Long> unresolvedIds) {
+        if (results.isEmpty()) {
+            return results;
+        }
+
+        boolean hasUnresolvedIds = unresolvedIds != null && !unresolvedIds.isEmpty();
+        List<Map<String, Object>> prioritized = new ArrayList<>();
+        for (Map<String, Object> item : results) {
+            Map<String, Object> copy = new LinkedHashMap<>(item);
+            List<String> reasons = new ArrayList<>(asStringList(copy.get("matchReasons")));
+            double rankScore = asDouble(copy.get("rankScore"));
+            long eventId = asLong(copy.get("mysql_event_id"));
+            double eventBoost = 0D;
+            List<String> eventSignals = new ArrayList<>();
+
+            if (hasUnresolvedIds && unresolvedIds.contains(eventId)) {
+                eventBoost += retrievalProperties.getRanking().getUnresolvedEventBonus();
+                reasons.add("unresolved_event_boost");
+                eventSignals.add("unresolved_event_boost");
+            }
+            if (isPlotHookEvent(copy)) {
+                eventBoost += retrievalProperties.getRanking().getPlotHookBonus();
+                reasons.add("plot_hook_priority");
+                eventSignals.add("plot_hook_priority");
+            }
+
+            rankScore += eventBoost;
+
+            copy.put("rankScore", round(rankScore));
+            copy.put("matchReasons", List.copyOf(reasons));
+            copy.put("rankExplanation", String.join(" | ", reasons));
+            Map<String, Object> recallTrace = ensureMap(copy, "recallTrace");
+            recallTrace.put("rankingSignals", List.copyOf(reasons));
+            recallTrace.put("eventSignals", List.copyOf(eventSignals));
+            Map<String, Object> scoreBreakdown = ensureMap(recallTrace, "scoreBreakdown");
+            scoreBreakdown.put("eventBoost", round(eventBoost));
+            scoreBreakdown.put("finalScore", round(rankScore));
+            prioritized.add(copy);
+        }
+
+        prioritized.sort(rankComparator());
+        return prioritized;
+    }
+
+    private String resolvePrimaryField(String collectionName) {
+        return switch (collectionName) {
+            case "novel_characters", "novel_items" -> "name";
+            case "novel_events", "novel_faction_inspire" -> "title";
+            default -> null;
+        };
+    }
+
+    private boolean isPlotHookEvent(Map<String, Object> item) {
+        if (asInt(item.get("event_type")) == 0) {
+            return true;
+        }
+
+        String title = safeLower(Objects.toString(item.get("title"), ""));
+        String description = safeLower(Objects.toString(item.get("description"), ""));
+        return containsHookCue(title) || containsHookCue(description);
+    }
+
+    private boolean containsHookCue(String text) {
+        return text.contains("伏笔")
+                || text.contains("未解")
+                || text.contains("悬念")
+                || text.contains("线索")
+                || text.contains("谜团");
+    }
+
+    private List<String> asStringList(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().map(Object::toString).collect(Collectors.toList());
+        }
+        return List.of();
+    }
+
+    private Map<String, Object> searchParams() {
+        return Map.of("ef_search", retrievalProperties.getSearch().getEfSearch());
     }
 
     private List<Map<String, Object>> executeVectorSearch(String collectionName,
@@ -317,7 +517,7 @@ public class MilvusSearchService {
                 .filter(filter)
                 .topK(topK)
                 .outputFields(outputFields)
-                .searchParams(SEARCH_PARAMS)
+                .searchParams(searchParams())
                 .build();
 
         SearchResp resp = milvusClient.search(searchReq);
@@ -354,12 +554,12 @@ public class MilvusSearchService {
         }
 
         if (!baseQuery.isBlank() && currentChapterNum != null) {
-            variants.add(baseQuery + " ?" + currentChapterNum + "? ?? ??");
+            variants.add(baseQuery + " " + retrievalProperties.getHints().getCurrentChapter());
         } else if (!baseQuery.isBlank() && expansionHint != null && !expansionHint.isBlank()) {
             variants.add(baseQuery + " " + expansionHint);
         }
 
-        return variants.stream().limit(MAX_QUERY_VARIANTS).collect(Collectors.toList());
+        return variants.stream().limit(retrievalProperties.getSearch().getMaxQueryVariants()).collect(Collectors.toList());
     }
 
     private List<String> extractKeywords(String queryText) {
@@ -368,7 +568,7 @@ public class MilvusSearchService {
         }
 
         String[] tokens = queryText.toLowerCase(Locale.ROOT)
-                .split("[\s,?????????()????????-]+");
+                .split("[\\s,。！？；;、()（）\\-]+");
 
         LinkedHashSet<String> keywords = new LinkedHashSet<>();
         for (String token : tokens) {
@@ -546,6 +746,16 @@ public class MilvusSearchService {
                 .toLowerCase(Locale.ROOT);
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> ensureMap(Map<String, Object> parent, String key) {
+        Object value = parent.get(key);
+        if (value instanceof Map<?, ?> map) {
+            return (Map<String, Object>) map;
+        }
+        Map<String, Object> created = new LinkedHashMap<>();
+        parent.put(key, created);
+        return created;
+    }
     private int countKeywordHits(String content, List<String> keywords) {
         int hits = 0;
         for (String keyword : keywords) {
@@ -581,6 +791,20 @@ public class MilvusSearchService {
             return Long.parseLong(value.toString());
         } catch (NumberFormatException ex) {
             return 0L;
+        }
+    }
+
+    private int asInt(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value.toString());
+        } catch (NumberFormatException ex) {
+            return 0;
         }
     }
 
