@@ -57,7 +57,7 @@ See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walk
 | Import stability | Streaming import, novel-scoped checkpoints, progress reporting, and idempotent retries | `src/main/java/com/novel/agent/service/DataImportService.java` |
 | Cost governance | Scoped budgets, degradation events, model fallback, and outline fallback | `src/main/java/com/novel/agent/service/TokenCostService.java` |
 | Dependency hygiene | Security-fixed transitive baselines, Dependabot, and PR dependency review | `docs/DEPENDENCY_SECURITY.md` |
-| Regression safety | 26 automated tests across service and controller layers | `docs/TEST_MATRIX.md` |
+| Regression safety | 27 automated tests across service and controller layers | `docs/TEST_MATRIX.md` |
 
 ## Tech Stack
 
@@ -164,7 +164,7 @@ The default application address is `http://localhost:8080`.
 
 ## Verification Baseline
 
-The current repository includes 26 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, and controller APIs.
+The current repository includes 27 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, and controller APIs.
 
 ```powershell
 mvn test -DskipITs

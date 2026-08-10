@@ -172,4 +172,14 @@ If this roadmap is completed well, `novel_agent` can support resume statements l
 - [x] cost and stability mechanisms can be demonstrated
 - [x] the GitHub docs support interview storytelling directly
 
-The source-controlled definition of done is complete. Live Milvus throughput and latency numbers remain an explicit maintenance task and are not replaced by CI fixture results.
+The source-controlled definition of done is complete. Live Milvus throughput now has a small isolated baseline, while large-scale capacity and corpus-aligned semantic quality remain explicit maintenance tasks and are not replaced by CI fixture results.
+
+## 9. Maintenance Queue
+
+The P0/P1/P2 source-controlled plan is complete. The following items are intentionally kept as the next evidence-oriented queue rather than mixed into the completed roadmap:
+
+- [x] record an isolated live import throughput baseline without modifying the shared corpus
+- [x] record a deterministic token-cost before/after comparison using the existing governance service
+- [ ] align live RAG evaluation labels with the language and content of the production-like corpus before claiming semantic quality numbers
+- [ ] repeat the import benchmark at a larger scale on a pinned host specification before making capacity claims
+- [ ] decide whether long-term metrics should move from in-memory snapshots to persisted or Prometheus-backed history

@@ -1,6 +1,6 @@
 # Cost Governance Case
 
-Updated: 2026-08-09
+Updated: 2026-08-10
 
 ## Goal
 
@@ -59,6 +59,27 @@ This case demonstrates four engineering points that are stronger than a plain "L
 2. the system tracks consumption by request, novel, model, day, and month
 3. the system does not fail blindly when the happy path is unavailable
 4. the degraded response is still useful to the end user and demo-friendly
+
+## Reproducible Before/After Benchmark
+
+The repository includes a deterministic benchmark that exercises the existing `TokenCostService` without calling a real model or consuming external API quota.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-cost-governance-benchmark.ps1 `
+  -OutputPath artifacts/cost-governance-benchmark.json
+```
+
+The benchmark replays four identical writing requests with a synthetic readable pricing fixture:
+
+| Mode | Accepted | Blocked | Billable tokens | Estimated cost |
+|------|----------|---------|-----------------|----------------|
+| strict mode off | 4 | 0 | 40 | 4.0 |
+| strict mode on, daily budget 20 | 2 | 2 | 20 | 2.0 |
+
+- measured delta: `50%` fewer billable tokens and `50%` lower estimated cost
+- operational behavior: the third and fourth requests are blocked before model execution
+- deterministic evidence: `src/test/java/com/novel/agent/service/CostGovernanceBenchmarkTest.java` and `docs/benchmarks/cost-governance-benchmark-20260810.json`
+- caveat: the prices are synthetic fixture values for behavior comparison, not a provider quotation
 
 ## Key Files
 

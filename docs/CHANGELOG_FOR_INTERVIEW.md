@@ -130,7 +130,7 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - change: added context-size metrics to the RAG report, added `scripts/run-rag-evaluation.ps1`, recorded a deterministic ranking case and post-generation regression case, and normalized core Markdown files to UTF-8 without BOM
 - result: GitHub readers can distinguish CI fixture evidence from live Milvus numbers, reproduce the API-backed evaluation command, and follow measurable retrieval and generation cases without oral context
 - tradeoff: fixture results remain explicitly non-production evidence; live latency and throughput still require a reachable environment
-- evidence: `docs/BENCHMARK_REPORT.md`, `docs/WRITING_QUALITY_CASES.md`, `docs/METRICS_BASELINE.md`, `scripts/run-rag-evaluation.ps1`, and the 26-test Maven baseline
+- evidence: `docs/BENCHMARK_REPORT.md`, `docs/WRITING_QUALITY_CASES.md`, `docs/METRICS_BASELINE.md`, `scripts/run-rag-evaluation.ps1`, and the 27-test Maven baseline
 
 ### 2026-08-10 (live Milvus validation and collection lifecycle hardening)
 
@@ -158,3 +158,12 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - result: a live 60-record run produced 120 segments in `8.176s` service time at `7.34 records/s` and `14.68 segments/s`, with `0` retries, `1` flush, and `0` failures; the temporary id was deleted from all Milvus collections afterward
 - tradeoff: the benchmark uses a small operational sample and must not be presented as a 50K capacity claim; larger runs still need the same cleanup discipline
 - evidence: `src/main/java/com/novel/agent/service/DataImportService.java`, `src/main/java/com/novel/agent/controller/DataImportController.java`, `src/test/java/com/novel/agent/service/DataImportServiceTest.java`, `scripts/run-import-benchmark.ps1`, and `docs/BENCHMARK_REPORT.md`
+
+### 2026-08-10 (deterministic token-cost governance evidence)
+
+- topic: cost governance measurement
+- problem: token limits and degradation behavior were implemented, but the repository did not yet show a reproducible before/after cost comparison
+- change: added `CostGovernanceBenchmarkTest`, a Maven-backed PowerShell runner, and a committed JSON evidence snapshot using the existing `TokenCostService`
+- result: with four identical writing requests, strict governance accepted `2/4`, blocked `2/4`, and reduced billable tokens and estimated cost by `50%`
+- tradeoff: the benchmark uses synthetic pricing to validate control behavior; it is not a real provider billing quote
+- evidence: `src/test/java/com/novel/agent/service/CostGovernanceBenchmarkTest.java`, `scripts/run-cost-governance-benchmark.ps1`, `docs/COST_GOVERNANCE_CASE.md`, and `docs/benchmarks/cost-governance-benchmark-20260810.json`

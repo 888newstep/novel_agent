@@ -40,7 +40,6 @@ Record the following in every round:
 | R0-CONTRACT | 2026-08-10 | 15 | metric aggregation fixture | 3 | 100% | 100% | 1.000 | not representative | not representative | not representative | emitted | n/a | CI contract: `RagEvaluationServiceTest` |
 | R1-FIXTURE | 2026-08-10 | 1 | continuation ranking | 1 | 100% after ranking | n/a | n/a | not measured | not measured | not measured | n/a | n/a | Top-1 relevant result: `0/1 -> 1/1` |
 | R0-LIVE-20260810 | 2026-08-10 | 15 | cloud Milvus operational run | 5 | 0%* | 0%* | 0.000* | 256.1ms | 692ms | 692ms | 563 | n/a | 15/15 queries returned 5 candidates; semantic score is not comparable* |
-| R0-LIVE | pending | pending | Milvus-backed baseline | pending | pending | pending | pending | pending | pending | pending | pending | pending | run `scripts/run-rag-evaluation.ps1` |
 
 `R0-CONTRACT` and `R1-FIXTURE` are deterministic CI evidence, not production latency claims. A live row must be recorded only after the embedding provider, Milvus instance, host, dataset, and parameters are written down.
 
@@ -78,6 +77,22 @@ Record the following in every round:
 - scope: a 60-record operational sample; this is not a 50K capacity extrapolation
 - evidence: `scripts/run-import-benchmark.ps1` and the committed snapshot `docs/benchmarks/import-benchmark-live-20260810.json`
 - decision: keep the `novelId`-isolated benchmark path and repeat with a larger dataset before making capacity claims
+
+## Token Cost Governance Baseline
+
+### COST-GOVERNANCE-20260810
+
+This is a deterministic service-level fixture, not a real provider billing report.
+
+| Mode | Accepted | Blocked | Billable tokens | Estimated cost |
+|------|----------|---------|-----------------|----------------|
+| strict mode off | 4 | 0 | 40 | 4.0 |
+| strict mode on, daily token budget 20 | 2 | 2 | 20 | 2.0 |
+
+- replay size: 4 identical writing requests
+- measured delta: `50%` fewer billable tokens and `50%` lower estimated cost
+- evidence: `src/test/java/com/novel/agent/service/CostGovernanceBenchmarkTest.java`, `scripts/run-cost-governance-benchmark.ps1`, and `docs/benchmarks/cost-governance-benchmark-20260810.json`
+- caveat: synthetic pricing is used to make the behavior delta visible; it must not be interpreted as provider pricing
 
 ## Reproducible Live Run
 

@@ -27,7 +27,7 @@ Use the following labels consistently:
 | Cost degradation strategies | Verified | budget fallback, model fallback, embedding fallback | `src/main/java/com/novel/agent/controller/NovelController.java`, `src/main/java/com/novel/agent/service/DeepSeekService.java`, `src/main/java/com/novel/agent/service/EmbeddingService.java` |
 | Public import throughput number | Verified | 2026-08-10 live run: 60 source records, 120 segments, `7.34 records/s`, `14.68 segments/s`, `0` retries, `1` flush, `0` failures | `scripts/run-import-benchmark.ps1`, `docs/benchmarks/import-benchmark-live-20260810.json` |
 | Public retrieval latency number on real env | Verified | 2026-08-10 live run: `Avg=256.1ms`, `P95=692ms`, `P99=692ms` | `docs/BENCHMARK_REPORT.md` |
-| Public token-cost before/after comparison | Ready To Measure | accounting and degradation events available | `docs/COST_GOVERNANCE_CASE.md` |
+| Public token-cost before/after comparison | Verified | deterministic 4-request fixture: strict governance reduces billable tokens and estimated cost by `50%`, blocks `2/4` requests | `scripts/run-cost-governance-benchmark.ps1`, `docs/benchmarks/cost-governance-benchmark-20260810.json` |
 | CI retrieval contract result | Verified | 15 cases, `Recall@3=100%`, `Precision@3=100%`, `MRR=1.000` in deterministic fixture | `src/test/java/com/novel/agent/service/RagEvaluationServiceTest.java` |
 | Reproducible live evaluation command | Verified | API runner writes the complete report and prints the metric summary | `scripts/run-rag-evaluation.ps1` |
 | Milvus collection lifecycle | Verified | indexed collections auto-load after startup; unindexed collections are skipped and search degrades to an empty result | `src/main/java/com/novel/agent/config/MilvusLifecycleConfig.java`, `src/main/java/com/novel/agent/service/MilvusAdminService.java`, `src/main/java/com/novel/agent/service/MilvusSearchService.java` |
@@ -66,9 +66,9 @@ Use the following labels consistently:
   - representative training dataset
   - stable host specification
 
-### Next Number To Capture
+### Next Scale Run To Capture
 
-Recommended public metric block:
+For the next larger import run, preserve the same public metric block and add the host specification:
 
 - dataset size
 - total import time

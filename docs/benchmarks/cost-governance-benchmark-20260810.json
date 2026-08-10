@@ -1,0 +1,31 @@
+{
+  "benchmarkId": "COST-GOVERNANCE-20260810",
+  "attempts": 4,
+  "before": {
+    "strictMode": false,
+    "requestCount": 4,
+    "acceptedRequests": 4,
+    "blockedRequests": 0,
+    "billableTokens": 40,
+    "estimatedCostUsd": 4.0
+  },
+  "after": {
+    "strictMode": true,
+    "requestCount": 4,
+    "acceptedRequests": 2,
+    "blockedRequests": 2,
+    "billableTokens": 20,
+    "estimatedCostUsd": 2.0
+  },
+  "delta": {
+    "billableTokenReductionPct": 50.0,
+    "estimatedCostReductionPct": 50.0,
+    "blockedRequestsAdded": 2
+  },
+  "pricingFixture": {
+    "inputPerMillionTokens": 100000,
+    "outputPerMillionTokens": 100000,
+    "synthetic": true
+  },
+  "caveat": "This benchmark validates governance behavior, not a production provider price."
+}

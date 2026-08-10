@@ -11,7 +11,7 @@ It is intentionally written as a GitHub-facing engineering document instead of a
 
 - build entry: `mvn test -DskipITs`
 - latest verified status: pass
-- current automated test count: 26
+- current automated test count: 27
 - test types currently covered:
   - service-level unit tests
   - controller contract tests
@@ -27,6 +27,7 @@ It is intentionally written as a GitHub-facing engineering document instead of a
 | Writing generation response | `memoryLayers`, `consistencyCheck`, `generationTrace`, `postGenerationCheck` response contract, warn-to-pass regression gate | `src/test/java/com/novel/agent/controller/NovelControllerTest.java` |
 | Budget degradation | budget block fallback to outline-only response | `src/test/java/com/novel/agent/controller/NovelControllerTest.java` |
 | Cost governance | chat accounting, blocked requests, per-novel and per-model scopes, degradation event summary | `src/test/java/com/novel/agent/service/TokenCostServiceTest.java` |
+| Cost governance benchmark | deterministic strict-mode before/after token and cost comparison | `src/test/java/com/novel/agent/service/CostGovernanceBenchmarkTest.java` |
 | Cost-control API | summary, settings update error mapping, clear-record flow | `src/test/java/com/novel/agent/controller/CostControlControllerTest.java` |
 | Import status API | enriched progress/status views and already-running import behavior | `src/test/java/com/novel/agent/controller/DataImportControllerTest.java` |
 | Import retry hardening | batch retry success, retry exhaustion, retry cleanup semantics | `src/test/java/com/novel/agent/service/DataImportServiceTest.java` |
