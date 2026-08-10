@@ -3,16 +3,16 @@ package com.novel.agent.controller;
 import com.novel.agent.service.DataImportService;
 import com.novel.agent.service.MilvusAdminService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
-/**
- * 训练数据导入控制器
- * 用于导入 novel_cn_token512_50k.json 到 Milvus
- * 支持断点续跑、进度查询、导入完成后建索引
- */
 @RestController
 @RequestMapping("/api/import")
 @RequiredArgsConstructor
@@ -21,27 +21,24 @@ public class DataImportController {
     private final DataImportService dataImportService;
     private final MilvusAdminService milvusAdminService;
 
-    /**
-     * 启动 50k 训练数据导入（异步）
-     * 默认路径：E:\AI新质力\网文数据集\novel_cn_token512_50k.json
-     * 支持断点续跑：崩溃后重新调用即可从断点恢复
-     */
     @PostMapping("/training-data")
     public Map<String, Object> importTrainingData(
             @RequestParam(defaultValue = "E:\\AI新质力\\网文数据集\\novel_cn_token512_50k.json") String filePath) {
 
         if (dataImportService.isRunning()) {
-            return Map.of("success", false, "message", "导入任务正在运行中，请先查询进度");
+            return Map.of(
+                    "success", false,
+                    "message", "导入任务正在运行中，请先查询进度",
+                    "status", dataImportService.getImportStatus()
+            );
         }
 
         CompletableFuture.runAsync(() -> {
             try {
                 DataImportService.ImportResult result = dataImportService.importFromJson(filePath);
-
-                // 数据全部写入完成后，询问是否建索引（由用户自行调用 /api/admin/milvus/build-index）
                 System.out.println("==============================================");
-                System.out.println("数据导入完成！结果: " + result);
-                System.out.println("请调用 POST /api/admin/milvus/build-index 建索引");
+                System.out.println("训练数据导入完成，结果: " + result);
+                System.out.println("请调用 POST /api/admin/milvus/build-index 构建索引");
                 System.out.println("然后调用 POST /api/admin/milvus/load 加载集合");
                 System.out.println("==============================================");
             } catch (Exception e) {
@@ -51,46 +48,41 @@ public class DataImportController {
 
         return Map.of(
                 "success", true,
-                "message", "导入任务已异步启动，请调用 /api/import/progress 查看进度"
+                "message", "导入任务已异步启动，请调用 /api/import/progress 或 /api/import/status 查看进度",
+                "status", dataImportService.getImportStatus()
         );
     }
 
-    /**
-     * 查询导入进度
-     */
     @GetMapping("/progress")
     public Map<String, Object> getProgress() {
-        long progress = dataImportService.getProgress();
-        long total = dataImportService.getTotal();
-        boolean running = dataImportService.isRunning();
+        Map<String, Object> status = new LinkedHashMap<>(dataImportService.getImportStatus());
+        long progress = readLong(status.get("processedRecords"));
+        long total = readLong(status.get("totalRecords"));
+        boolean running = Boolean.TRUE.equals(status.get("running"));
 
-        String progressStr;
-        if (total <= 0) {
-            progressStr = "正在统计总行数...";
-        } else {
-            double pct = total > 0 ? (double) progress / total * 100 : 0;
-            progressStr = String.format("%d / %d (%.1f%%)", progress, total, pct);
-        }
+        String progressStr = total <= 0
+                ? "正在统计总记录数..."
+                : String.format("%d / %d (%.1f%%)", progress, total, total == 0 ? 0D : progress * 100D / total);
 
-        // 检查断点文件是否存在（存在表示有可恢复的断点）
         String checkpointHint = "";
-        if (!running && progress > 0) {
-            checkpointHint = "上次导入中断，已记录断点。重新调用 POST /api/import/training-data 即可续跑";
+        if (Boolean.TRUE.equals(status.get("checkpointExists"))) {
+            checkpointHint = running
+                    ? "导入运行中，checkpoint 会在批次成功后持续刷新"
+                    : "检测到可恢复 checkpoint，重新调用 POST /api/import/training-data 即可续跑";
         }
 
-        return Map.of(
-                "running", running,
-                "progress", progress,
-                "total", total,
-                "progressStr", progressStr,
-                "checkpointHint", checkpointHint
-        );
+        status.put("progress", progress);
+        status.put("total", total);
+        status.put("progressStr", progressStr);
+        status.put("checkpointHint", checkpointHint);
+        return status;
     }
 
-    /**
-     * 导入完成后，建索引 + 加载（一步到位）
-     * 数据已写入 novel_segments，该集合已在 MilvusAdminService 管理列表中
-     */
+    @GetMapping("/status")
+    public Map<String, Object> getStatus() {
+        return getProgress();
+    }
+
     @PostMapping("/finalize")
     public Map<String, Object> finalizeImport() {
         if (dataImportService.isRunning()) {
@@ -98,19 +90,28 @@ public class DataImportController {
         }
 
         CompletableFuture.runAsync(() -> {
-            // 1. flush 所有数据落盘
             milvusAdminService.flushAll();
-
-            // 2. 为所有集合建索引（novel_segments 在 COLLECTION_NAMES 列表中）
             milvusAdminService.buildAllIndexesAsync();
-
-            // 3. 加载所有集合
             milvusAdminService.loadAllCollections();
         });
 
         return Map.of(
                 "success", true,
-                "message", "全量建索引+加载已异步启动，请通过日志或 Attu 监控进度"
+                "message", "finalize 任务已异步启动，请关注 Milvus flush/build-index/load 日志"
         );
+    }
+
+    private long readLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(value.toString());
+        } catch (NumberFormatException ex) {
+            return 0L;
+        }
     }
 }

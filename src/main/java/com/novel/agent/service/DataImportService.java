@@ -6,47 +6,38 @@ import com.google.gson.JsonParser;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 import io.milvus.v2.client.MilvusClientV2;
-import io.milvus.v2.service.vector.request.InsertReq;
 import io.milvus.v2.service.utility.request.FlushReq;
+import io.milvus.v2.service.vector.request.DeleteReq;
+import io.milvus.v2.service.vector.request.InsertReq;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.*;
-import java.util.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * 训练数据导入服务 — 断点续跑
- *
- * 功能：
- * 1. 流式读取 JSON（Jackson 逐行解析，避免 OOM）
- * 2. 批量向量化 + 批量入库 Milvus
- * 3. 断点续跑：每批写入后记录偏移量，崩溃后可恢复
- * 4. 全部完成后统一 flush，由外部触发建索引
- *
- * 数据格式：novel_cn_token512_50k.json
- * {"instruction": "...", "input": "...", "output": "..."}
- *
- * 目标集合：novel_segments
- * 字段映射：每条件拆为2条segment，通过 chapter_num 关联
- *   - 上文(input)  → content="指令：{instruction}\n上文：{input}", segment_type=1(上文)
- *   - 续写(output) → content="指令：{instruction}\n续写：{output}", segment_type=2(续写)
- *   共享 chapter_num 保证上下文关联
- *   检索时可通过 chapter_num 获取对应的"另一半"
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class DataImportService {
 
+    private static final String CHECKPOINT_SUFFIX = ".checkpoint";
+    private static final int AUTO_FLUSH_BATCH_INTERVAL = 28;
+
     private final MilvusClientV2 milvusClient;
     private final EmbeddingService embeddingService;
-
-    private static final String CHECKPOINT_SUFFIX = ".checkpoint";
 
     @Value("${milvus.collection.segments:novel_segments}")
     private String segmentsCollection;
@@ -54,67 +45,105 @@ public class DataImportService {
     @Value("${milvus.write.batch-size:64}")
     private int batchSize;
 
-    /** 当前进度（仅供查询） */
-    private final AtomicLong currentProgress = new AtomicLong(0);
-    /** 总条数（仅供查询） */
-    private final AtomicLong totalCount = new AtomicLong(0);
-    /** 是否正在运行 */
-    private volatile boolean running = false;
+    @Value("${milvus.import.max-retries:3}")
+    private int maxRetries;
 
-    /**
-     * 从 JSON 文件导入数据（断点续跑）
-     *
-     * @param jsonFilePath JSON 文件绝对路径
-     * @return 导入结果
-     */
+    @Value("${milvus.import.retry-backoff-ms:1000}")
+    private long retryBackoffMs;
+
+    private final AtomicLong currentProgress = new AtomicLong(0);
+    private final AtomicLong totalCount = new AtomicLong(0);
+    private volatile boolean running = false;
+    private volatile Map<String, Object> importStatus = createIdleStatus();
+
     public ImportResult importFromJson(String jsonFilePath) {
         Path jsonPath = Paths.get(jsonFilePath);
         if (!Files.exists(jsonPath)) {
             throw new IllegalArgumentException("文件不存在: " + jsonFilePath);
         }
 
+        Path checkpointPath = getCheckpointPath(jsonPath);
         running = true;
         currentProgress.set(0);
         totalCount.set(0);
+        importStatus = createIdleStatus();
+        updateStatus(Map.of(
+                "running", true,
+                "stage", "preparing",
+                "filePath", jsonFilePath,
+                "checkpointPath", checkpointPath.toString(),
+                "startedAt", System.currentTimeMillis(),
+                "message", "preparing import task",
+                "checkpointExists", Files.exists(checkpointPath)
+        ));
 
         try {
-            Path checkpointPath = getCheckpointPath(jsonPath);
             long skipRecords = readCheckpoint(checkpointPath);
-            log.info("断点文件: {}，已处理 {} 条", checkpointPath, skipRecords);
+            currentProgress.set(skipRecords);
+            updateStatus(Map.of(
+                    "stage", "checkpoint_loaded",
+                    "resumeFromRecord", skipRecords,
+                    "lastCheckpointRecord", skipRecords,
+                    "processedRecords", skipRecords,
+                    "checkpointExists", skipRecords > 0 || Files.exists(checkpointPath),
+                    "message", skipRecords > 0 ? "resuming from saved checkpoint" : "starting from beginning"
+            ));
 
-            // 检测文件格式：JSON 数组 还是 JSON Lines
             boolean isArray = detectFormat(jsonPath);
-            log.info("文件格式: {}", isArray ? "JSON数组" : "JSON Lines");
+            String format = isArray ? "json_array" : "json_lines";
+            updateStatus(Map.of(
+                    "stage", "analyzing_file",
+                    "format", format,
+                    "message", "detected input format"
+            ));
 
-            // 预估总数
             long estimated = isArray ? estimateArraySize(jsonPath) : countLines(jsonPath);
             totalCount.set(estimated);
-            log.info("预估总条数: {}", estimated);
+            updateStatus(Map.of(
+                    "stage", "counting_records",
+                    "totalRecords", estimated,
+                    "processedRecords", skipRecords,
+                    "message", "estimated total records"
+            ));
 
             ImportResult result = isArray
                     ? doImportArray(jsonPath, checkpointPath, skipRecords)
                     : doImportLines(jsonPath, checkpointPath, skipRecords);
 
             Files.deleteIfExists(checkpointPath);
-            log.info("导入完成，共处理 {} 条，成功 {} 条，失败 {} 条",
-                    result.totalProcessed, result.successCount, result.failCount);
-
+            updateStatus(Map.of(
+                    "running", false,
+                    "stage", "completed",
+                    "finishedAt", System.currentTimeMillis(),
+                    "processedRecords", currentProgress.get(),
+                    "successCount", result.successCount,
+                    "failCount", result.failCount,
+                    "lastCheckpointRecord", currentProgress.get(),
+                    "checkpointExists", false,
+                    "message", "import finished successfully"
+            ));
             return result;
-        } catch (Exception e) {
-            log.error("导入过程异常", e);
-            throw new RuntimeException("导入失败: " + e.getMessage(), e);
+        } catch (Exception ex) {
+            updateStatus(Map.of(
+                    "running", false,
+                    "stage", "failed",
+                    "finishedAt", System.currentTimeMillis(),
+                    "lastError", ex.getMessage() == null ? "unknown error" : ex.getMessage(),
+                    "checkpointExists", Files.exists(checkpointPath),
+                    "message", "import failed"
+            ));
+            log.error("import failed", ex);
+            throw new RuntimeException("导入失败: " + ex.getMessage(), ex);
         } finally {
             running = false;
+            updateStatus(Map.of("running", false));
         }
     }
 
-    /**
-     * 检测文件格式：读第一个非空白字符，[ 表示 JSON 数组，{ 表示 JSON Lines
-     */
     private boolean detectFormat(Path jsonPath) throws IOException {
-        try (Reader r = Files.newBufferedReader(jsonPath, StandardCharsets.UTF_8)) {
+        try (Reader reader = Files.newBufferedReader(jsonPath, StandardCharsets.UTF_8)) {
             int ch;
-            while ((ch = r.read()) != -1) {
+            while ((ch = reader.read()) != -1) {
                 if (!Character.isWhitespace(ch)) {
                     return ch == '[';
                 }
@@ -123,33 +152,30 @@ public class DataImportService {
         return false;
     }
 
-    /**
-     * 预估 JSON 数组元素个数（基于文件大小估算，不需要精确）
-     */
     private long estimateArraySize(Path jsonPath) throws IOException {
         long fileSize = Files.size(jsonPath);
-        // 575MB ≈ 50k 条训练数据，给出固定估算
         if (fileSize > 100_000_000) {
-            return 50000;
+            return 50_000;
         }
-        return fileSize / 11500;
+        return Math.max(1, fileSize / 11_500);
     }
 
-    /**
-     * JSON 数组格式导入（流式读取，不占内存）
-     */
     private ImportResult doImportArray(Path jsonPath, Path checkpointPath, long skipRecords) throws IOException {
         ImportResult result = new ImportResult();
         long processed = 0;
-
+        int batchCount = 0;
+        int flushCount = 0;
         List<JsonObject> batch = new ArrayList<>();
         List<String> embedTexts = new ArrayList<>();
-        int flushCounter = 0;
+
+        updateStatus(Map.of(
+                "stage", "importing_array",
+                "processedRecords", skipRecords,
+                "message", "streaming json array records"
+        ));
 
         try (JsonReader reader = new JsonReader(Files.newBufferedReader(jsonPath, StandardCharsets.UTF_8))) {
             reader.beginArray();
-
-            // 跳过已处理的记录
             while (processed < skipRecords && reader.hasNext()) {
                 reader.skipValue();
                 processed++;
@@ -158,336 +184,445 @@ public class DataImportService {
             while (reader.hasNext()) {
                 JsonObject json = readJsonObject(reader);
                 processed++;
-
                 try {
-                    String instruction = getString(json, "instruction");
-                    String input = getString(json, "input");
-                    String output = getString(json, "output");
-
-                    if (input.isEmpty() && output.isEmpty()) {
-                        result.failCount++;
-                        result.totalProcessed++;
-                        continue;
-                    }
-
-                    long timestamp = System.currentTimeMillis() / 1000;
-                    // 共享 chapter_num 关联上文和续写
-                    long chapterNum = processed;
-
-                    // 上文 (input) — segment_type=1, content 带 instruction 前缀
-                    if (!input.isEmpty()) {
-                        String inputContent = "指令：" + instruction + "\n上文：" + input.trim().replaceAll("\\s+", " ");
-                        if (inputContent.length() > 450) {
-                            inputContent = inputContent.substring(0, 450);
-                        }
-                        JsonObject inputRow = new JsonObject();
-                        inputRow.addProperty("novel_id", 0L);
-                        inputRow.addProperty("chapter_num", chapterNum);
-                        inputRow.addProperty("segment_type", 1);
-                        inputRow.addProperty("content", inputContent);
-                        inputRow.addProperty("ts", timestamp);
-                        batch.add(inputRow);
-                        embedTexts.add(inputContent);
-                    }
-
-                    // 续写 (output) — segment_type=2, content 带 instruction 前缀
-                    if (!output.isEmpty()) {
-                        String outputContent = "指令：" + instruction + "\n续写：" + output.trim().replaceAll("\\s+", " ");
-                        if (outputContent.length() > 450) {
-                            outputContent = outputContent.substring(0, 450);
-                        }
-                        JsonObject outputRow = new JsonObject();
-                        outputRow.addProperty("novel_id", 0L);
-                        outputRow.addProperty("chapter_num", chapterNum);
-                        outputRow.addProperty("segment_type", 2);
-                        outputRow.addProperty("content", outputContent);
-                        outputRow.addProperty("ts", timestamp);
-                        batch.add(outputRow);
-                        embedTexts.add(outputContent);
-                    }
-
+                    appendTrainingRows(batch, embedTexts, json, processed, result);
                     if (batch.size() >= batchSize) {
-                        processBatch(batch, embedTexts, result);
-                        flushCounter++;
-
-                        if (flushCounter % 28 == 0) {
-                            milvusClient.flush(FlushReq.builder()
-                                    .collectionNames(List.of(segmentsCollection))
-                                    .build());
-                            log.info("自动 flush [{}]（第 {} 次，已处理 {} 条）", segmentsCollection, flushCounter / 28, processed);
+                        batchCount++;
+                        processBatch(batch, embedTexts, result, processed, batchCount, flushCount, "importing_array");
+                        if (batchCount % AUTO_FLUSH_BATCH_INTERVAL == 0) {
+                            flushCount++;
+                            flushSegments();
+                            updateStatus(Map.of(
+                                    "stage", "flushing",
+                                    "flushCount", (long) flushCount,
+                                    "message", "auto flush after batch window"
+                            ));
                         }
-
-                        writeCheckpoint(checkpointPath, processed);
-                        currentProgress.set(processed);
-
-                        batch.clear();
-                        embedTexts.clear();
+                        checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "checkpoint_saved");
                     }
-                } catch (Exception e) {
-                    log.warn("第 {} 条解析失败，跳过: {}", processed, e.getMessage());
+                } catch (IllegalStateException ex) {
+                    throw ex;
+                } catch (Exception ex) {
+                    log.warn("array record {} parse failed: {}", processed, ex.getMessage());
                     result.failCount++;
                     result.totalProcessed++;
+                    checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "record_skipped");
                 }
             }
-
             reader.endArray();
-
-            if (!batch.isEmpty()) {
-                processBatch(batch, embedTexts, result);
-                writeCheckpoint(checkpointPath, processed);
-                currentProgress.set(processed);
-            }
-
-            milvusClient.flush(FlushReq.builder()
-                    .collectionNames(List.of(segmentsCollection))
-                    .build());
-            log.info("最终 flush [{}] 完成，共处理 {} 条", segmentsCollection, processed);
         }
 
+        if (!batch.isEmpty()) {
+            batchCount++;
+            processBatch(batch, embedTexts, result, processed, batchCount, flushCount, "importing_array");
+            checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "checkpoint_saved");
+        }
+
+        flushCount++;
+        flushSegments();
+        updateStatus(Map.of(
+                "stage", "final_flush",
+                "flushCount", (long) flushCount,
+                "processedRecords", processed,
+                "successCount", result.successCount,
+                "failCount", result.failCount,
+                "batchCount", (long) batchCount,
+                "message", "final flush completed"
+        ));
         return result;
     }
 
-    /**
-     * 从 JsonReader 读取一个 JSON 对象，转为 Gson JsonObject
-     */
     private JsonObject readJsonObject(JsonReader reader) throws IOException {
         JsonObject obj = new JsonObject();
         reader.beginObject();
         while (reader.peek() != JsonToken.END_OBJECT) {
             String name = reader.nextName();
             switch (reader.peek()) {
-                case STRING:
-                    obj.addProperty(name, reader.nextString());
-                    break;
-                case NUMBER:
-                    obj.addProperty(name, reader.nextString());
-                    break;
-                case BOOLEAN:
-                    obj.addProperty(name, reader.nextBoolean());
-                    break;
-                case NULL:
+                case STRING -> obj.addProperty(name, reader.nextString());
+                case NUMBER -> obj.addProperty(name, reader.nextString());
+                case BOOLEAN -> obj.addProperty(name, reader.nextBoolean());
+                case NULL -> {
                     reader.nextNull();
                     obj.add(name, null);
-                    break;
-                default:
-                    reader.skipValue();
-                    break;
+                }
+                default -> reader.skipValue();
             }
         }
         reader.endObject();
         return obj;
     }
 
-    /**
-     * JSON Lines 格式导入（逐行解析，保留兼容性）
-     */
     private ImportResult doImportLines(Path jsonPath, Path checkpointPath, long skipLines) throws IOException {
         ImportResult result = new ImportResult();
-        long processed = skipLines;  // 已跳过的行数
-
+        long processed = skipLines;
+        long lineNum = 0;
+        int batchCount = 0;
+        int flushCount = 0;
         List<JsonObject> batch = new ArrayList<>();
         List<String> embedTexts = new ArrayList<>();
-        int flushCounter = 0;
+
+        updateStatus(Map.of(
+                "stage", "importing_lines",
+                "processedRecords", skipLines,
+                "message", "streaming json lines records"
+        ));
 
         try (BufferedReader reader = Files.newBufferedReader(jsonPath, StandardCharsets.UTF_8)) {
             String line;
-            long lineNum = 0;
-
-            // 跳过已处理的行
             while (lineNum < skipLines && (line = reader.readLine()) != null) {
                 lineNum++;
             }
-
-            // 继续读取剩余行
             while ((line = reader.readLine()) != null) {
                 lineNum++;
-                line = line.trim();
-                if (line.isEmpty()) continue;
-
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
                 try {
-                    JsonObject json = JsonParser.parseString(line).getAsJsonObject();
-                    String instruction = getString(json, "instruction");
-                    String input = getString(json, "input");
-                    String output = getString(json, "output");
-
-                    if (input.isEmpty() && output.isEmpty()) {
-                        result.failCount++;
-                        result.totalProcessed++;
-                        continue;
-                    }
-
-                    long timestamp = System.currentTimeMillis() / 1000;
-                    long chapterNum = processed;
-
-                    // 上文 (input) — segment_type=1, content 带 instruction 前缀
-                    if (!input.isEmpty()) {
-                        String inputContent = "指令：" + instruction + "\n上文：" + input.trim().replaceAll("\\s+", " ");
-                        if (inputContent.length() > 450) {
-                            inputContent = inputContent.substring(0, 450);
-                        }
-                        JsonObject inputRow = new JsonObject();
-                        inputRow.addProperty("novel_id", 0L);
-                        inputRow.addProperty("chapter_num", chapterNum);
-                        inputRow.addProperty("segment_type", 1);
-                        inputRow.addProperty("content", inputContent);
-                        inputRow.addProperty("ts", timestamp);
-                        batch.add(inputRow);
-                        embedTexts.add(inputContent);
-                    }
-
-                    // 续写 (output) — segment_type=2, content 带 instruction 前缀
-                    if (!output.isEmpty()) {
-                        String outputContent = "指令：" + instruction + "\n续写：" + output.trim().replaceAll("\\s+", " ");
-                        if (outputContent.length() > 450) {
-                            outputContent = outputContent.substring(0, 450);
-                        }
-                        JsonObject outputRow = new JsonObject();
-                        outputRow.addProperty("novel_id", 0L);
-                        outputRow.addProperty("chapter_num", chapterNum);
-                        outputRow.addProperty("segment_type", 2);
-                        outputRow.addProperty("content", outputContent);
-                        outputRow.addProperty("ts", timestamp);
-                        batch.add(outputRow);
-                        embedTexts.add(outputContent);
-                    }
-
-                    // 达到 batch 大小，批量处理
+                    JsonObject json = JsonParser.parseString(trimmed).getAsJsonObject();
+                    processed = lineNum;
+                    appendTrainingRows(batch, embedTexts, json, processed, result);
                     if (batch.size() >= batchSize) {
-                        processBatch(batch, embedTexts, result);
-                        processed = lineNum;
-                        flushCounter++;
-
-                        // 每 28 批 flush 一次
-                        if (flushCounter % 28 == 0) {
-                            milvusClient.flush(FlushReq.builder()
-                                    .collectionNames(List.of(segmentsCollection))
-                                    .build());
-                            log.info("自动 flush [{}]（第 {} 次）", segmentsCollection, flushCounter / 28);
+                        batchCount++;
+                        processBatch(batch, embedTexts, result, processed, batchCount, flushCount, "importing_lines");
+                        if (batchCount % AUTO_FLUSH_BATCH_INTERVAL == 0) {
+                            flushCount++;
+                            flushSegments();
+                            updateStatus(Map.of(
+                                    "stage", "flushing",
+                                    "flushCount", (long) flushCount,
+                                    "message", "auto flush after batch window"
+                            ));
                         }
-
-                        // 写断点
-                        writeCheckpoint(checkpointPath, processed);
-                        currentProgress.set(processed);
-
-                        // 清空批次
-                        batch.clear();
-                        embedTexts.clear();
+                        checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "checkpoint_saved");
                     }
-                } catch (Exception e) {
-                    log.warn("第 {} 行解析失败，跳过: {}", lineNum, e.getMessage());
+                } catch (IllegalStateException ex) {
+                    throw ex;
+                } catch (Exception ex) {
+                    log.warn("line {} parse failed: {}", lineNum, ex.getMessage());
                     result.failCount++;
                     result.totalProcessed++;
+                    processed = lineNum;
+                    checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "record_skipped");
                 }
             }
-
-            // 处理剩余不足一批的数据
-            if (!batch.isEmpty()) {
-                processBatch(batch, embedTexts, result);
-                processed = lineNum;
-                writeCheckpoint(checkpointPath, processed);
-                currentProgress.set(processed);
-            }
-
-            // 最后 flush 一次
-            milvusClient.flush(FlushReq.builder()
-                    .collectionNames(List.of(segmentsCollection))
-                    .build());
-            log.info("最终 flush [{}] 完成", segmentsCollection);
         }
 
+        if (!batch.isEmpty()) {
+            batchCount++;
+            processBatch(batch, embedTexts, result, processed, batchCount, flushCount, "importing_lines");
+            checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "checkpoint_saved");
+        }
+
+        flushCount++;
+        flushSegments();
+        updateStatus(Map.of(
+                "stage", "final_flush",
+                "flushCount", (long) flushCount,
+                "processedRecords", processed,
+                "successCount", result.successCount,
+                "failCount", result.failCount,
+                "batchCount", (long) batchCount,
+                "message", "final flush completed"
+        ));
         return result;
     }
 
-    /**
-     * 处理一批数据：批量向量化 → 批量插入 Milvus
-     */
-    private void processBatch(List<JsonObject> rows, List<String> embedTexts, ImportResult result) {
-        try {
-            // 1. 批量向量化
-            List<List<Float>> embeddings = embeddingService.batchGenerateEmbedding(embedTexts);
+    private void appendTrainingRows(List<JsonObject> batch,
+                                    List<String> embedTexts,
+                                    JsonObject json,
+                                    long chapterNum,
+                                    ImportResult result) {
+        String instruction = getString(json, "instruction");
+        String input = getString(json, "input");
+        String output = getString(json, "output");
+        if (input.isEmpty() && output.isEmpty()) {
+            result.failCount++;
+            result.totalProcessed++;
+            return;
+        }
 
-            // 2. 填充向量并插入
-            List<JsonObject> validRows = new ArrayList<>();
-            for (int i = 0; i < embeddings.size(); i++) {
-                if (embeddings.get(i) != null) {
-                    JsonObject row = rows.get(i);
-                    List<Float> vec = embeddings.get(i);
-                    JsonArray vecArray = new JsonArray();
-                    for (Float v : vec) {
-                        vecArray.add(v);
-                    }
-                    row.add("embedding", vecArray);
-                    validRows.add(row);
-                } else {
-                    result.failCount++;
-                }
-            }
-
-            if (!validRows.isEmpty()) {
-                milvusClient.insert(InsertReq.builder()
-                        .collectionName(segmentsCollection)
-                        .data(validRows)
-                        .build());
-                log.debug("批次插入 [{}] {} 条", segmentsCollection, validRows.size());
-            }
-
-            result.successCount += validRows.size();
-            result.totalProcessed += rows.size();
-
-            // 内存释放：每批成功后清空集合
-            rows.clear();
-            embedTexts.clear();
-        } catch (Exception e) {
-            log.error("批次处理失败（{} 条），放弃该批次", rows.size(), e);
-            result.failCount += rows.size();
-            result.totalProcessed += rows.size();
+        long timestamp = System.currentTimeMillis() / 1000;
+        if (!input.isEmpty()) {
+            String inputContent = normalizeContent("指令：" + instruction + "\n上文：" + input);
+            batch.add(createSegmentRow(chapterNum, 1, timestamp, inputContent));
+            embedTexts.add(inputContent);
+        }
+        if (!output.isEmpty()) {
+            String outputContent = normalizeContent("指令：" + instruction + "\n续写：" + output);
+            batch.add(createSegmentRow(chapterNum, 2, timestamp, outputContent));
+            embedTexts.add(outputContent);
         }
     }
 
-    // =============================================
-    // 断点管理
-    // =============================================
-
-    /**
-     * 获取断点文件路径（与 JSON 文件同目录，扩展名 .checkpoint）
-     */
-    private Path getCheckpointPath(Path jsonPath) {
-        String fileName = jsonPath.getFileName().toString() + CHECKPOINT_SUFFIX;
-        return jsonPath.resolveSibling(fileName);
+    private JsonObject createSegmentRow(long chapterNum, int segmentType, long timestamp, String content) {
+        JsonObject row = new JsonObject();
+        row.addProperty("novel_id", 0L);
+        row.addProperty("chapter_num", chapterNum);
+        row.addProperty("segment_type", segmentType);
+        row.addProperty("content", content);
+        row.addProperty("ts", timestamp);
+        return row;
     }
 
-    /**
-     * 读取断点（已处理行数），不存在则返回 0
-     */
+    private String normalizeContent(String content) {
+        String normalized = content == null ? "" : content.trim().replaceAll("\\s+", " ");
+        return normalized.length() > 450 ? normalized.substring(0, 450) : normalized;
+    }
+
+    private void processBatch(List<JsonObject> rows,
+                              List<String> embedTexts,
+                              ImportResult result,
+                              long processed,
+                              int batchCount,
+                              int flushCount,
+                              String sourceStage) {
+        int safeMaxRetries = Math.max(1, maxRetries);
+        BatchRange batchRange = extractChapterRange(rows);
+        String retryRange = batchRange.displayValue();
+        Exception lastException = null;
+
+        for (int attempt = 1; attempt <= safeMaxRetries; attempt++) {
+            try {
+                if (attempt > 1) {
+                    long retryCount = attempt - 1L;
+                    Map<String, Object> retryPatch = new LinkedHashMap<>();
+                    retryPatch.put("stage", "retrying_batch");
+                    retryPatch.put("processedRecords", processed);
+                    retryPatch.put("batchCount", (long) batchCount);
+                    retryPatch.put("flushCount", (long) flushCount);
+                    retryPatch.put("currentBatchSize", rows.size());
+                    retryPatch.put("successCount", result.successCount);
+                    retryPatch.put("failCount", result.failCount);
+                    retryPatch.put("retryCount", retryCount);
+                    retryPatch.put("lastRetriedRange", retryRange);
+                    retryPatch.put("lastRetryReason", lastException == null || lastException.getMessage() == null
+                            ? "batch failed"
+                            : lastException.getMessage());
+                    retryPatch.put("message", "retrying failed batch after cleanup");
+                    retryPatch.put("sourceStage", sourceStage);
+                    updateStatus(retryPatch);
+
+                    sleepBackoff(retryCount);
+                    deleteSegmentRange(batchRange);
+                }
+
+                Map<String, Object> embeddingPatch = new LinkedHashMap<>();
+                embeddingPatch.put("stage", "embedding_batch");
+                embeddingPatch.put("processedRecords", processed);
+                embeddingPatch.put("batchCount", (long) batchCount);
+                embeddingPatch.put("flushCount", (long) flushCount);
+                embeddingPatch.put("currentBatchSize", rows.size());
+                embeddingPatch.put("successCount", result.successCount);
+                embeddingPatch.put("failCount", result.failCount);
+                embeddingPatch.put("retryCount", (long) (attempt - 1));
+                embeddingPatch.put("message", attempt == 1
+                        ? "generating embeddings for current batch"
+                        : "regenerating embeddings for retried batch");
+                embeddingPatch.put("sourceStage", sourceStage);
+                updateStatus(embeddingPatch);
+
+                List<List<Float>> embeddings = embeddingService.batchGenerateEmbedding(embedTexts);
+                PreparedBatch preparedBatch = buildPreparedBatch(rows, embeddings);
+
+                if (!preparedBatch.validRows().isEmpty()) {
+                    Map<String, Object> insertingPatch = new LinkedHashMap<>();
+                    insertingPatch.put("stage", "inserting_batch");
+                    insertingPatch.put("processedRecords", processed);
+                    insertingPatch.put("batchCount", (long) batchCount);
+                    insertingPatch.put("flushCount", (long) flushCount);
+                    insertingPatch.put("currentBatchSize", preparedBatch.validRows().size());
+                    insertingPatch.put("successCount", result.successCount);
+                    insertingPatch.put("failCount", result.failCount);
+                    insertingPatch.put("retryCount", (long) (attempt - 1));
+                    insertingPatch.put("message", "inserting batch into milvus");
+                    insertingPatch.put("sourceStage", sourceStage);
+                    updateStatus(insertingPatch);
+
+                    milvusClient.insert(InsertReq.builder()
+                            .collectionName(segmentsCollection)
+                            .data(preparedBatch.validRows())
+                            .build());
+                }
+
+                result.successCount += preparedBatch.validRows().size();
+                result.failCount += preparedBatch.invalidCount();
+                result.totalProcessed += rows.size();
+                rows.clear();
+                embedTexts.clear();
+                return;
+            } catch (Exception ex) {
+                lastException = ex;
+                if (attempt >= safeMaxRetries) {
+                    break;
+                }
+
+                log.warn("batch processing attempt {} failed, range={}, rows={}: {}",
+                        attempt,
+                        retryRange,
+                        rows.size(),
+                        ex.getMessage());
+            }
+        }
+
+        int failedRows = rows.size();
+        result.failCount += failedRows;
+        result.totalProcessed += failedRows;
+        rows.clear();
+        embedTexts.clear();
+
+        Map<String, Object> failedPatch = new LinkedHashMap<>();
+        failedPatch.put("stage", "batch_failed");
+        failedPatch.put("processedRecords", processed);
+        failedPatch.put("batchCount", (long) batchCount);
+        failedPatch.put("flushCount", (long) flushCount);
+        failedPatch.put("currentBatchSize", failedRows);
+        failedPatch.put("successCount", result.successCount);
+        failedPatch.put("failCount", result.failCount);
+        failedPatch.put("retryCount", (long) safeMaxRetries);
+        failedPatch.put("lastRetriedRange", retryRange);
+        failedPatch.put("lastRetryReason", lastException == null || lastException.getMessage() == null
+                ? "batch failed"
+                : lastException.getMessage());
+        failedPatch.put("lastError", lastException == null || lastException.getMessage() == null
+                ? "batch failed"
+                : lastException.getMessage());
+        failedPatch.put("message", "batch processing failed after retries");
+        failedPatch.put("sourceStage", sourceStage);
+        updateStatus(failedPatch);
+
+        log.error("batch processing failed after {} attempts, range={}, rows={}",
+                safeMaxRetries,
+                retryRange,
+                failedRows,
+                lastException);
+        throw new IllegalStateException("batch processing failed after retries", lastException);
+    }
+
+    private PreparedBatch buildPreparedBatch(List<JsonObject> rows, List<List<Float>> embeddings) {
+        if (embeddings == null) {
+            throw new IllegalStateException("embedding result is null");
+        }
+
+        List<JsonObject> validRows = new ArrayList<>();
+        int invalidCount = 0;
+        int upperBound = Math.min(rows.size(), embeddings.size());
+
+        for (int i = 0; i < upperBound; i++) {
+            List<Float> vector = embeddings.get(i);
+            if (vector == null || vector.isEmpty()) {
+                invalidCount++;
+                continue;
+            }
+            JsonArray vectorArray = new JsonArray();
+            for (Float value : vector) {
+                vectorArray.add(value);
+            }
+            JsonObject row = rows.get(i);
+            row.add("embedding", vectorArray);
+            validRows.add(row);
+        }
+
+        invalidCount += rows.size() - upperBound;
+        return new PreparedBatch(validRows, invalidCount);
+    }
+
+    private BatchRange extractChapterRange(List<JsonObject> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return new BatchRange(-1L, -1L);
+        }
+
+        long minChapter = Long.MAX_VALUE;
+        long maxChapter = Long.MIN_VALUE;
+        for (JsonObject row : rows) {
+            long chapterNum = row.has("chapter_num") && !row.get("chapter_num").isJsonNull()
+                    ? row.get("chapter_num").getAsLong()
+                    : -1L;
+            minChapter = Math.min(minChapter, chapterNum);
+            maxChapter = Math.max(maxChapter, chapterNum);
+        }
+        return new BatchRange(minChapter, maxChapter);
+    }
+
+    private void deleteSegmentRange(BatchRange batchRange) {
+        if (!batchRange.isValid()) {
+            return;
+        }
+        milvusClient.delete(DeleteReq.builder()
+                .collectionName(segmentsCollection)
+                .filter(String.format("novel_id == 0 && chapter_num >= %d && chapter_num <= %d",
+                        batchRange.fromChapter(),
+                        batchRange.toChapter()))
+                .build());
+    }
+
+    private void sleepBackoff(long retryCount) {
+        long sleepMillis = Math.max(0L, retryBackoffMs) * Math.max(0L, retryCount);
+        if (sleepMillis <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(sleepMillis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("retry backoff interrupted", ex);
+        }
+    }
+
+    private void checkpointProgress(Path checkpointPath,
+                                    long processed,
+                                    ImportResult result,
+                                    int batchCount,
+                                    int flushCount,
+                                    String stage) {
+        writeCheckpoint(checkpointPath, processed);
+        currentProgress.set(processed);
+        updateStatus(Map.of(
+                "stage", stage,
+                "processedRecords", processed,
+                "successCount", result.successCount,
+                "failCount", result.failCount,
+                "batchCount", (long) batchCount,
+                "flushCount", (long) flushCount,
+                "lastCheckpointRecord", processed,
+                "checkpointExists", true,
+                "message", "checkpoint updated"
+        ));
+    }
+
+    private void flushSegments() {
+        milvusClient.flush(FlushReq.builder()
+                .collectionNames(List.of(segmentsCollection))
+                .build());
+    }
+
+    private Path getCheckpointPath(Path jsonPath) {
+        return jsonPath.resolveSibling(jsonPath.getFileName().toString() + CHECKPOINT_SUFFIX);
+    }
+
     private long readCheckpoint(Path checkpointPath) {
         if (!Files.exists(checkpointPath)) {
-            return 0;
+            return 0L;
         }
         try {
             String content = Files.readString(checkpointPath, StandardCharsets.UTF_8).trim();
             return Long.parseLong(content);
-        } catch (Exception e) {
-            log.warn("读取断点文件失败，将从 0 开始: {}", e.getMessage());
-            return 0;
+        } catch (Exception ex) {
+            log.warn("read checkpoint failed, fallback to 0: {}", ex.getMessage());
+            return 0L;
         }
     }
 
-    /**
-     * 写入断点
-     */
     private void writeCheckpoint(Path checkpointPath, long processed) {
         try {
             Files.writeString(checkpointPath, String.valueOf(processed), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            log.warn("写入断点文件失败: {}", e.getMessage());
+        } catch (IOException ex) {
+            log.warn("write checkpoint failed: {}", ex.getMessage());
         }
     }
 
-    /**
-     * 统计文件行数（快速遍历，不加载到内存）
-     */
     private long countLines(Path path) throws IOException {
-        long count = 0;
+        long count = 0L;
         try (BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
             while (reader.readLine() != null) {
                 count++;
@@ -496,28 +631,76 @@ public class DataImportService {
         return count;
     }
 
-    // =============================================
-    // 状态查询
-    // =============================================
-
-    /** 当前进度 */
     public long getProgress() {
         return currentProgress.get();
     }
 
-    /** 总条数 */
     public long getTotal() {
         return totalCount.get();
     }
 
-    /** 是否正在运行 */
     public boolean isRunning() {
         return running;
     }
 
-    // =============================================
-    // 辅助
-    // =============================================
+    public Map<String, Object> getImportStatus() {
+        return importStatus;
+    }
+
+    private synchronized void updateStatus(Map<String, Object> patch) {
+        Map<String, Object> merged = new LinkedHashMap<>(importStatus);
+        merged.putAll(patch);
+        long processed = readLongValue(merged.get("processedRecords"));
+        long total = readLongValue(merged.get("totalRecords"));
+        double progressPct = total <= 0 ? 0D : Math.min(100D, processed * 100D / total);
+        merged.put("progressPct", Math.round(progressPct * 10D) / 10D);
+        merged.put("updatedAt", System.currentTimeMillis());
+        importStatus = Collections.unmodifiableMap(merged);
+    }
+
+    private Map<String, Object> createIdleStatus() {
+        Map<String, Object> status = new LinkedHashMap<>();
+        status.put("running", false);
+        status.put("stage", "idle");
+        status.put("filePath", "");
+        status.put("checkpointPath", "");
+        status.put("startedAt", 0L);
+        status.put("finishedAt", 0L);
+        status.put("updatedAt", 0L);
+        status.put("message", "idle");
+        status.put("lastError", "");
+        status.put("format", "unknown");
+        status.put("processedRecords", 0L);
+        status.put("totalRecords", 0L);
+        status.put("successCount", 0L);
+        status.put("failCount", 0L);
+        status.put("batchCount", 0L);
+        status.put("flushCount", 0L);
+        status.put("resumeFromRecord", 0L);
+        status.put("lastCheckpointRecord", 0L);
+        status.put("checkpointExists", false);
+        status.put("currentBatchSize", 0);
+        status.put("retryCount", 0L);
+        status.put("lastRetryReason", "");
+        status.put("lastRetriedRange", "");
+        status.put("progressPct", 0D);
+        status.put("sourceStage", "");
+        return Collections.unmodifiableMap(status);
+    }
+
+    private long readLongValue(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(value.toString());
+        } catch (NumberFormatException ex) {
+            return 0L;
+        }
+    }
 
     private String getString(JsonObject json, String key) {
         if (json.has(key) && !json.get(key).isJsonNull()) {
@@ -526,21 +709,31 @@ public class DataImportService {
         return "";
     }
 
-    // =============================================
-    // 内部类
-    // =============================================
-
     public static class ImportResult {
-        /** 总处理条数 */
         public long totalProcessed = 0;
-        /** 成功条数 */
         public long successCount = 0;
-        /** 失败条数 */
         public long failCount = 0;
 
         @Override
         public String toString() {
-            return String.format("总处理: %d, 成功: %d, 失败: %d", totalProcessed, successCount, failCount);
+            return String.format("total=%d, success=%d, fail=%d", totalProcessed, successCount, failCount);
+        }
+    }
+
+    private record PreparedBatch(List<JsonObject> validRows, int invalidCount) {
+    }
+
+    private record BatchRange(long fromChapter, long toChapter) {
+
+        private boolean isValid() {
+            return fromChapter >= 0 && toChapter >= fromChapter;
+        }
+
+        private String displayValue() {
+            if (!isValid()) {
+                return "unknown";
+            }
+            return fromChapter == toChapter ? String.valueOf(fromChapter) : fromChapter + "-" + toChapter;
         }
     }
 }

@@ -1,10 +1,12 @@
-﻿.idea/
+.idea/
 .vscode/
+.serena/
 *.iml
 .DS_Store
 
 .env
 target/
+artifacts/
 logs/
 *.log
 compile_*.log

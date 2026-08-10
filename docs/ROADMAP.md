@@ -1,217 +1,174 @@
-# `novel_agent` 当前项目计划清单
+# `novel_agent` Roadmap
 
-更新时间：2026-08-08
+Updated: 2026-08-10
 
-## 1. 文档目标
+## 1. Scope
 
-这份清单只服务于当前项目 `novel_agent`。
+`novel_agent` is the vertical product project.
+It should prove that you can turn AI capabilities into a complete business system for novel writing, not that you can build another generic agent platform.
 
-核心原则：
+This repo should keep focusing on:
 
-- 先把 `novel_agent` 做到可编译、可运行、可验证、可讲清楚。
-- 优先深挖当前已使用的技术：`Spring Boot`、`JPA/MySQL`、`Milvus`、`LangChain4j/DeepSeek`、成本控制、RAG 评估。
-- 更通用、更平台化、更偏 Agent 基础设施的技术，统一放在 `C:\Users\xiaohongfu\IdeaProjects\newagent` 体现。
-- P0 / P1 已完成，当前重点转向 P2 及以后。
+- structured novel knowledge modeling
+- chapter-aware retrieval and writing memory assembly
+- controlled generation and quality guardrails
+- token cost governance
+- offline evaluation and explainability
+- reproducible open-source engineering quality
 
-## 2. 项目定位
+This repo should **not** absorb responsibilities already covered by `C:\Users\xiaohongfu\IdeaProjects\newagent`, such as:
 
-`novel_agent` 的职责不是做一个“大而全”的通用 Agent 平台，而是做一个面向小说写作场景的垂直 AI 应用。
+- generic `ReAct` orchestration
+- supervisor or multi-agent platform abstractions
+- universal tool registry and tool protocol design
+- general-purpose Adaptive RAG platform routing
+- cross-domain knowledge platform capabilities
 
-当前项目应该突出这 4 个点：
+## 2. Current Base
 
-1. 小说知识的结构化存储与向量化检索。
-2. 面向续写场景的写作记忆构建。
-3. 成本控制、评估与可观测性。
-4. 场景一致性与生成质量治理。
+The current repository already has a useful base:
 
-不应在当前项目优先展开的内容：
+- domain entities for novel, chapter, character, faction, event, item, skill, and inspiration
+- retrieval services around `Milvus` and writing memory
+- import pipeline and knowledge processing entry points
+- token cost control endpoints and a lightweight dashboard
+- RAG evaluation service and controller
+- root-level open-source structure, CI, tests, and core docs
 
-- 通用 `ReAct` Agent 编排
-- 多 Agent 协作框架
-- MCP / 通用工具协议
-- 通用企业知识库问答平台能力
-- 长上下文平台化记忆系统
-- 自适应路由、通用 Query Router、平台级 Tool Registry
+This means the next stage is not "add more technologies".
+The next stage is "make the existing chain deeper, more measurable, more stable, and easier to present in interviews".
 
-这些内容统一在 `newagent` 中体现，避免两个项目边界混乱。
+## 3. Resume Goal
 
-## 3. 当前已知问题
+For autumn recruitment SP, `novel_agent` should support three signals:
 
-P0 / P1 相关问题已经收口，当前剩余重点是 P2 及以后。
+1. Business depth: you understand one vertical scenario deeply, not only generic AI frameworks.
+2. Engineering rigor: you can quantify quality, cost, stability, and tradeoffs.
+3. Open-source presentation: the repo can be cloned, read, started, tested, and explained clearly.
 
-- [x] 解决编译失败，重点检查：
-  - `service/KnowledgeBatchProcessor.java`
-  - `service/KnowledgeSearchService.java`
-  - `service/NovelFileScanner.java`
-  - `service/MilvusSearchService.java`
-- [x] 确认依赖与 API 兼容性，避免实体类、Milvus 类型、驱动坐标不一致。
-- [x] 补足最小测试面；当前项目没有形成有效的测试基线。
-- [x] 补项目说明文档；目前只有 `docs/DATAFLOW.md`，缺少完整对外说明。
+The best pairing is:
 
-## 4. 执行逻辑
+- `newagent`: generic AI platform capability, Adaptive RAG, ReAct, multi-agent, observability, evaluation framework
+- `novel_agent`: vertical writing product, structured story memory, retrieval ranking, generation control, consistency guardrails, scenario-specific evaluation
 
-执行顺序必须固定，避免一边加功能、一边放着基础问题不处理。
+## 4. Highest-Priority Gaps
 
-### P0：先恢复工程可用性
+### P0: clean positioning and documentation
 
-目标：项目能稳定编译，基础启动链路清晰。
+Goal: make the repo easy to understand in 3 minutes.
 
-- [x] 修复当前编译错误，保证 `mvn clean compile` 通过。
-- [x] 清理不再使用或版本不兼容的代码路径。
-- [x] 对齐依赖声明，检查 MySQL 驱动、Milvus SDK、LangChain4j 版本是否一致。
-- [x] 明确本地启动前置条件：MySQL、Milvus、模型 API Key、小说目录。
-- [x] 给出最小启动步骤和最小验证步骤。
+- [x] add a dedicated document that explains how `novel_agent` complements `newagent`
+- [x] add one architecture diagram for the vertical writing chain: import -> retrieval -> memory assembly -> generation -> validation -> evaluation
+- [x] add one demo document with 2 to 3 real writing scenarios and expected outcomes
+- [x] add one benchmark-style document that records retrieval quality and token cost before/after optimizations
+- [x] ensure every core document is UTF-8 clean and readable in GitHub
 
-### P1：建立最小工程化基线
+### P1: strengthen vertical retrieval quality
 
-目标：项目不仅能跑，还要容易验证、容易交接、容易面试讲清楚。
+Goal: make retrieval quality measurable and interview-friendly.
 
-- [x] 增加 `README.md`，至少包含项目定位、架构、启动方式、核心接口、数据链路。
-- [x] 整理配置项，补 `env` 示例或配置说明，避免“只在本机能跑”。
-- [x] 为核心服务补最小单元测试或集成测试：
-  - 检索服务
-  - 成本控制服务
-  - 评估服务
-  - 关键 Controller 的基本接口行为
-- [x] 统一异常处理、日志格式和关键链路日志字段。
-- [x] 清理明显的编码、命名、注释和无效文件问题。
+- [x] split evaluation cases by scenario:
+  - character profile lookup
+  - unresolved event recall
+  - world setting lookup
+  - item or skill lookup
+  - pre-writing context assembly
+- [x] extend `rag_eval_dataset.json` with more writing-specific hard cases
+- [x] record `Recall@K`, `Precision@K`, `MRR`, keyword coverage, average latency, `P95`, and `P99`
+- [x] expose retrieval explanation fields:
+  - why a segment was recalled
+  - which ranking signals contributed
+  - whether chapter recency or unresolved-event weight changed the score
+- [x] keep one stable evaluation profile so improvements can be compared over time
 
-### P2：深挖当前检索链路
+### P1: add generation quality guardrails
 
-目标：围绕小说写作场景，把现有 `Milvus + MySQL` 检索做深，而不是盲目加新架构。
+Goal: show that generation is controlled, not just "call model and print text".
 
-- [x] 梳理 `hybridSearch` 的召回、去重、排序、截断逻辑。
-- [x] 继续强化当前章节感知能力：
-  - 近期章节加权
-  - 未来章节过滤
-  - 每章节结果上限控制
-- [x] 加强写作场景专属排序信号：
-  - 角色名命中
-  - 事件标题命中
-  - 设定类条目优先级
-  - 伏笔/未解决事件优先级
-- [x] 将关键检索参数配置化，避免硬编码散落在服务内部。
-- [x] 输出“为什么召回这些上下文”的解释信息，提升可调试性。
+- [x] add a pre-generation consistency check:
+  - [x] conflicting character context and duplicate hook warnings
+  - [x] resolved events being reused as unresolved memory
+  - [x] item status conflicts
+  - [x] faction relation conflict warnings
+- [x] define a layered `WritingMemory` view:
+  - recent chapter context
+  - key characters
+  - unresolved foreshadowing or events
+  - current-scene world settings
+- [x] add generation trace output for debugging:
+  - selected memory blocks
+  - dropped candidates
+  - total context length
+  - estimated and actual token cost
+- [x] add post-generation rule checks for basic quality regression
 
-### P3：把评估做成闭环
+### P1: harden import and cost-governance paths
 
-目标：不靠感觉优化检索，而是靠数据说话。
+Goal: show operational thinking under limited resources.
 
-- [ ] 扩充 `rag_eval_dataset.json`，按场景分类：
-  - 人物设定查询
-  - 事件回溯查询
-  - 世界观/势力查询
-  - 道具/技能查询
-  - 续写前上下文召回
-- [ ] 在评估报告中区分：
-  - `Recall@K`
-  - `Precision@K`
-  - `MRR`
-  - 平均延迟 / P95 / P99
-  - 关键词覆盖率
-- [ ] 形成“优化前 vs 优化后”的对比记录。
-- [ ] 对每次检索策略调整保留实验结论，避免重复踩坑。
+- [x] make import checkpoints explicit and observable
+- [x] add idempotent retry strategy for batch import failures
+- [x] add per-novel and per-stage progress reporting
+- [x] expand token governance dimensions:
+  - per request
+  - per novel
+  - daily
+  - monthly
+  - per model
+- [x] add degradation policy when budget, model, or embedding service fails
 
-### P4：做小说场景的内容质量治理
+### P2: improve observability and repo credibility
 
-目标：把项目从“会检索”推进到“能辅助写得更稳”。
+Goal: make the project look maintainable, not just functional.
 
-- [ ] 增加续写前的一致性检查：
-  - 角色设定是否冲突
-  - 事件是否已解决
-  - 物品状态是否矛盾
-  - 阵营关系是否前后冲突
-- [ ] 为 `WritingMemory` 增加更明确的分层：
-  - 最近章节上下文
-  - 关键人物
-  - 未回收伏笔
-  - 当前场景相关设定
-- [ ] 在生成前做 Prompt 约束，在生成后做基础质量校验。
-- [ ] 优先解决“逻辑连续性”问题，而不是先追求更复杂的 Agent 编排。
+- [x] add `docs/DEMO_SCRIPT.md` for live interview walkthrough
+- [x] add `docs/CHANGELOG_FOR_INTERVIEW.md` to record important optimization rounds
+- [x] add issue templates and pull request template for GitHub
+- [x] add coverage reporting or at least a documented test matrix
+- [x] add a small metrics document covering import throughput, retrieval latency, and token cost
 
-### P5：补齐成本与稳定性治理
+## 5. Concrete Deliverables For SP
 
-目标：把“能调用模型”升级成“能长期稳定使用”。
+Before you treat this repo as a main SP-facing project, it should have these deliverables:
 
-- [ ] 校准价格配置，确保 Token 成本统计可信。
-- [ ] 继续完善降级逻辑：
-  - 主模型失败时回退
-  - Embedding 服务异常时降级
-  - 超预算时拒绝或缩减上下文
-- [ ] 增加缓存命中率、调用失败率、平均耗时等统计。
-- [ ] 补导入链路的幂等性与批处理失败恢复能力。
-- [ ] 为核心链路补最小可观测信息，方便演示和排查。
+- [x] one clean GitHub homepage with clear value proposition
+- [x] one reproducible local startup path
+- [x] one evaluation report with numbers, not only descriptions
+- [x] one retrieval optimization case with before/after comparison
+- [x] one generation consistency case with a visible quality gain
+- [x] one cost governance case with an actual limit or degradation demonstration
+- [x] one end-to-end demo script that can be explained in 5 minutes
 
-## 5. 质量门槛
+## 6. Implementation Order
 
-只有满足下面这些条件，当前项目才算真正进入“可用于秋招展示”的状态。
+Do not push these in parallel without sequence.
+The efficient order is:
 
-### 工程质量
+1. finish doc cleanup and repo positioning
+2. expand evaluation dataset and fixed metrics report
+3. add retrieval explanation and generation guardrails
+4. harden import stability and cost governance
+5. add demo scripts and benchmark evidence for interviews
 
-- [x] `mvn clean compile` 通过。
-- [x] 核心测试可执行，不依赖手工修改代码。
-- [x] 关键配置项都有说明，不依赖口头传递。
-- [x] 关键接口有明确输入输出示例。
+## 7. Resume Mapping
 
-### 检索质量
+If this roadmap is completed well, `novel_agent` can support resume statements like:
 
-- [x] ?????????????????
-- [ ] `Recall@K`、`MRR` 至少有一轮量化提升记录。
-- [ ] 结果重复率、无关召回率有明确观察和优化结论。
-- [ ] 续写所需的上下文分层清晰，不是简单拼接大段文本。
+- designed structured story knowledge and multi-collection retrieval for novel writing
+- built writing-memory assembly and controllable generation guardrails
+- established offline evaluation and token-cost linked analysis
+- improved retrieval relevance and explainability with scenario-specific ranking signals
+- hardened import pipeline and budget governance for long-text AI workloads
 
-### 内容质量
+## 8. Definition Of Done
 
-- [ ] 能证明系统在“人物一致性、事件连续性、设定不冲突”上有帮助。
-- [ ] 至少准备 2 到 3 组真实小说场景演示样例。
-- [ ] 能展示一次“检索 -> 记忆组装 -> 生成 -> 校验”的完整链路。
+`novel_agent` is ready for strong resume usage when:
 
-### 成本与稳定性
+- [x] the project can be cloned and verified by others without oral explanation
+- [x] the repo shows clear boundaries from `newagent`
+- [x] retrieval improvements have measurable evidence
+- [x] generation quality control has at least one convincing case
+- [x] cost and stability mechanisms can be demonstrated
+- [x] the GitHub docs support interview storytelling directly
 
-- [ ] Token 统计可查。
-- [ ] 预算限制可演示。
-- [ ] 模型或向量服务异常时，系统行为可预期。
-- [ ] 导入、检索、生成三条主链路都有基本日志支撑。
-
-## 6. 与 `newagent` 的边界
-
-为了保证两个项目各自有辨识度，后续安排按下面执行。
-
-`novel_agent` 负责体现：
-
-- 垂直场景设计
-- 小说知识建模
-- 写作记忆构建
-- 检索排序优化
-- RAG 评估闭环
-- 成本控制与内容质量治理
-
-`newagent` 负责体现：
-
-- 通用 Agent 平台能力
-- `ReAct` / 多 Agent
-- 更平台化的多路召回 RAG
-- 通用工具调用体系
-- 更泛化的记忆系统与平台工程化能力
-
-## 7. 完成定义
-
-当下面这些事项都完成时，`novel_agent` 才算进入下一阶段。
-
-- [ ] 项目可编译、可启动、可演示。
-- [ ] 至少有一套最小测试基线。
-- [ ] 至少有一份完整 README。
-- [ ] 至少有一轮量化检索优化结果。
-- [ ] 至少有一组可讲清楚的小说场景质量提升案例。
-- [ ] 项目边界清楚，不与 `newagent` 重复堆技术点。
-
-## 8. 当前建议的真实优先级
-
-如果只按当前阶段推进，建议严格按下面顺序执行：
-
-1. 先修编译和依赖兼容问题。
-2. 再补 README、配置说明、测试基线。
-3. 然后做检索链路优化和评估闭环。
-4. 最后再做内容一致性治理和成本稳定性增强。
-
-在 `novel_agent` 没有完成以上事项前，不建议继续往当前项目里堆新的平台化技术点。
+The source-controlled definition of done is complete. Live Milvus throughput and latency numbers remain an explicit maintenance task and are not replaced by CI fixture results.

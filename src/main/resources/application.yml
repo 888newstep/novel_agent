@@ -70,6 +70,13 @@ ai:
     monthly-token-budget: 5000000
     daily-budget-usd: 5.0
     monthly-budget-usd: 100.0
+    per-novel-daily-token-budget: 0
+    per-novel-daily-budget-usd: 0.0
+    per-model-daily-token-budget: 0
+    per-model-daily-budget-usd: 0.0
+    degrade-on-budget-exceeded: true
+    degrade-on-model-failure: true
+    degrade-on-embedding-failure: true
     pricing:
       currency: USD
       input-per-million-tokens: 0.0        # ?????????????????
@@ -98,6 +105,9 @@ milvus:
   write:
     batch-size: 18                        # 450 chars × 18 = 8100 tokens < 8192
     flush-interval: 28                    # 每 N 批执行一次 flush
+  import:
+    max-retries: 3
+    retry-backoff-ms: 1000
 
 logging:
   level:

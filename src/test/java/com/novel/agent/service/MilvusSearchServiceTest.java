@@ -12,17 +12,38 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MilvusSearchServiceTest {
+
+    @Test
+    void writingDefaultRankingImprovesContinuationTopOneAgainstRawVectorScore() {
+        RetrievalProperties rawScoreProperties = new RetrievalProperties();
+        rawScoreProperties.getRanking().setKeywordHitWeight(0D);
+        rawScoreProperties.getRanking().setVariantHitWeight(0D);
+        rawScoreProperties.getRanking().setPrimaryFieldKeywordHitWeight(0D);
+        rawScoreProperties.getRanking().setPrimaryFieldExactMatchBonus(0D);
+        rawScoreProperties.getRanking().setExactMatchBonus(0D);
+        rawScoreProperties.getRanking().setRecencyMaxBoost(0D);
+
+        List<Map<String, Object>> rawScoreResults = runContinuationSearch(rawScoreProperties);
+        List<Map<String, Object>> writingDefaultResults = runContinuationSearch(new RetrievalProperties());
+
+        assertEquals(8L, ((Number) rawScoreResults.get(0).get("chapter_num")).longValue());
+        assertEquals(8L, ((Number) writingDefaultResults.get(0).get("chapter_num")).longValue());
+        assertEquals("ritual before the battle", rawScoreResults.get(0).get("content"));
+        assertEquals("dragon oath reveal", writingDefaultResults.get(0).get("content"));
+        assertTrue(((String) writingDefaultResults.get(0).get("rankExplanation")).contains("exact_query_match"));
+        assertTrue(((String) writingDefaultResults.get(0).get("rankExplanation")).contains("chapter_distance=2"));
+    }
 
     @Test
     void ranksRelevantChapterAndExplainsWhyItWasReturned() {
@@ -79,11 +100,18 @@ class MilvusSearchServiceTest {
         assertEquals(2, ((Number) results.get(0).get("keywordHits")).intValue());
         assertTrue(((List<?>) results.get(0).get("matchReasons")).contains("exact_query_match"));
         assertTrue(((String) results.get(0).get("rankExplanation")).contains("chapter_distance=1"));
+
         @SuppressWarnings("unchecked")
         Map<String, Object> trace = (Map<String, Object>) results.get(0).get("recallTrace");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> explanation = (Map<String, Object>) results.get(0).get("explanation");
+
         assertEquals("dragon oath", trace.get("query"));
         assertTrue(((List<?>) trace.get("matchedQueryVariants")).contains("dragon oath"));
         assertTrue(((Map<?, ?>) trace.get("scoreBreakdown")).containsKey("primaryFieldBoost"));
+        assertTrue(((String) explanation.get("summary")).contains("chapter_distance=1"));
+        assertTrue((Boolean) explanation.get("usedChapterBoost"));
+        assertTrue(((Map<?, ?>) explanation.get("scoreBreakdown")).containsKey("finalScore"));
         assertTrue(results.stream().noneMatch(item -> ((Number) item.get("chapter_num")).intValue() == 11));
     }
 
@@ -107,14 +135,11 @@ class MilvusSearchServiceTest {
 
         when(embeddingService.batchGenerateEmbedding(List.of("dragon oath")))
                 .thenReturn(List.of(List.of(0.1f, 0.2f)));
-
-        SearchResp.SearchResult result = searchResult(1L, 0.88f, Map.of(
-                "chapter_num", 2,
+        SearchResp response = response(searchResult(1L, 0.91f, Map.of(
+                "chapter_num", 10,
                 "segment_type", "scene",
-                "content", "dragon oath reveal"
-        ));
-
-        SearchResp response = response(result);
+                "content", "dragon oath memory"
+        )));
         when(milvusClient.search(any(SearchReq.class))).thenReturn(response);
 
         List<Map<String, Object>> results = service.searchSegments(1L, "dragon oath", 1, 10);
@@ -141,35 +166,39 @@ class MilvusSearchServiceTest {
                 retrievalProperties
         );
 
-        when(embeddingService.batchGenerateEmbedding(List.of("白夜", "白夜 人物 关系 设定")))
+        when(embeddingService.batchGenerateEmbedding(List.of("bai ye", "bai ye " + retrievalProperties.getHints().getCharacter())))
                 .thenReturn(List.of(List.of(0.1f, 0.2f), List.of(0.2f, 0.3f)));
 
         SearchResp.SearchResult nameExact = searchResult(1L, 0.70f, Map.of(
                 "mysql_char_id", 1L,
-                "name", "白夜",
-                "char_text", "普通描述"
+                "name", "bai ye",
+                "char_text", "ordinary description"
         ));
         SearchResp.SearchResult bodyMatch = searchResult(2L, 0.95f, Map.of(
                 "mysql_char_id", 2L,
-                "name", "路人",
-                "char_text", "白夜 传说"
+                "name", "passerby",
+                "char_text", "bai ye legend"
         ));
         SearchResp characterResponse = response(nameExact, bodyMatch);
         when(milvusClient.search(any(SearchReq.class))).thenReturn(characterResponse, response());
 
-        List<Map<String, Object>> characterResults = service.searchCharacters(1L, "白夜", 1);
+        List<Map<String, Object>> characterResults = service.searchCharacters(1L, "bai ye", 1);
         assertEquals(1, characterResults.size());
         assertEquals(1L, ((Number) characterResults.get(0).get("mysql_char_id")).longValue());
         assertTrue(((String) characterResults.get(0).get("rankExplanation")).contains("name_exact_match"));
+
         @SuppressWarnings("unchecked")
         Map<String, Object> characterTrace = (Map<String, Object>) characterResults.get(0).get("recallTrace");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> characterExplanation = (Map<String, Object>) characterResults.get(0).get("explanation");
         assertEquals("name", ((Map<?, ?>) characterTrace.get("primaryFieldSignals")).get("field"));
         assertEquals(Boolean.TRUE, ((Map<?, ?>) characterTrace.get("primaryFieldSignals")).get("exactMatch"));
+        assertEquals(Boolean.FALSE, characterExplanation.get("usedEventBoost"));
 
         when(keyEventRepository.findByNovelIdAndResolvedFalse(eq(2L))).thenReturn(List.of(
                 KeyEvent.builder().id(10L).build()
         ));
-        when(embeddingService.batchGenerateEmbedding(List.of("dragon oath", "dragon oath 事件 伏笔 设定")))
+        when(embeddingService.batchGenerateEmbedding(List.of("dragon oath", "dragon oath " + retrievalProperties.getHints().getEvent())))
                 .thenReturn(List.of(List.of(0.3f, 0.4f), List.of(0.4f, 0.5f)));
 
         SearchResp.SearchResult unresolvedHook = searchResult(10L, 0.82f, Map.of(
@@ -177,14 +206,14 @@ class MilvusSearchServiceTest {
                 "chapter_num", 8,
                 "event_type", 0,
                 "title", "dragon oath",
-                "description", "伏笔尚未揭开"
+                "description", "hook remains unresolved"
         ));
         SearchResp.SearchResult resolvedTwist = searchResult(20L, 0.95f, Map.of(
                 "mysql_event_id", 20L,
                 "chapter_num", 9,
                 "event_type", 1,
                 "title", "dragon oath",
-                "description", "已经解决"
+                "description", "twist already resolved"
         ));
         SearchResp eventFirstResponse = response(unresolvedHook, resolvedTwist);
         SearchResp eventSecondResponse = response();
@@ -196,10 +225,15 @@ class MilvusSearchServiceTest {
         assertEquals(20L, ((Number) eventResults.get(1).get("mysql_event_id")).longValue());
         assertTrue(((String) eventResults.get(0).get("rankExplanation")).contains("unresolved_event_boost"));
         assertTrue(((String) eventResults.get(0).get("rankExplanation")).contains("plot_hook_priority"));
+
         @SuppressWarnings("unchecked")
         Map<String, Object> eventTrace = (Map<String, Object>) eventResults.get(0).get("recallTrace");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> eventExplanation = (Map<String, Object>) eventResults.get(0).get("explanation");
         assertTrue(((List<?>) eventTrace.get("eventSignals")).contains("unresolved_event_boost"));
         assertTrue(((Map<?, ?>) eventTrace.get("scoreBreakdown")).containsKey("eventBoost"));
+        assertTrue((Boolean) eventExplanation.get("usedEventBoost"));
+        assertTrue(((List<?>) eventExplanation.get("eventSignals")).contains("plot_hook_priority"));
     }
 
     private static SearchResp.SearchResult searchResult(Long id, float score, Map<String, Object> entity) {
@@ -208,6 +242,53 @@ class MilvusSearchServiceTest {
         result.setScore(score);
         result.setEntity(entity);
         return result;
+    }
+
+    private static List<Map<String, Object>> runContinuationSearch(RetrievalProperties retrievalProperties) {
+        MilvusClientV2 milvusClient = mock(MilvusClientV2.class);
+        EmbeddingService embeddingService = mock(EmbeddingService.class);
+        ChapterRepository chapterRepository = mock(ChapterRepository.class);
+        KeyEventRepository keyEventRepository = mock(KeyEventRepository.class);
+        RelationRepository relationRepository = mock(RelationRepository.class);
+        MilvusSearchService service = new MilvusSearchService(
+                milvusClient,
+                embeddingService,
+                chapterRepository,
+                keyEventRepository,
+                relationRepository,
+                retrievalProperties
+        );
+
+        when(embeddingService.batchGenerateEmbedding(any()))
+                .thenReturn(List.of(List.of(0.1f, 0.2f), List.of(0.2f, 0.3f)));
+        when(milvusClient.search(any(SearchReq.class))).thenReturn(
+                response(
+                        searchResult(1L, 0.70f, Map.of(
+                                "chapter_num", 8,
+                                "segment_type", "scene",
+                                "content", "dragon oath reveal"
+                        )),
+                        searchResult(2L, 0.95f, Map.of(
+                                "chapter_num", 8,
+                                "segment_type", "scene",
+                                "content", "ritual before the battle"
+                        ))
+                ),
+                response(
+                        searchResult(1L, 0.92f, Map.of(
+                                "chapter_num", 8,
+                                "segment_type", "scene",
+                                "content", "dragon oath reveal"
+                        )),
+                        searchResult(3L, 0.99f, Map.of(
+                                "chapter_num", 11,
+                                "segment_type", "scene",
+                                "content", "future twist"
+                        ))
+                )
+        );
+
+        return service.searchSegments(1L, "dragon oath", 1, 10);
     }
 
     private static SearchResp response(SearchResp.SearchResult... results) {

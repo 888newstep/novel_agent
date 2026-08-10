@@ -22,9 +22,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Embedding ?? ? ??? provider ??
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -64,6 +61,7 @@ public class EmbeddingService {
             }
             default -> {
                 AiProperties.OllamaEmbedding config = embeddingConfig.getOllama();
+                this.provider = "ollama";
                 this.baseUrl = config.getBaseUrl();
                 this.modelName = config.getModelName();
                 this.dimension = config.getDimension();
@@ -96,7 +94,6 @@ public class EmbeddingService {
         return text.trim().replaceAll("\s+", " ");
     }
 
-    @SuppressWarnings("unchecked")
     public List<Float> generateEmbedding(String text) {
         String cleanText = preprocess(text);
         if (cleanText.isEmpty()) {
@@ -112,39 +109,27 @@ public class EmbeddingService {
                 provider, modelName, "embedding.single", List.of(cleanText)
         );
         try {
-            List<Float> result = switch (provider) {
-                case "siliconflow" -> callSiliconflow(List.of(cleanText)).get(0);
-                default -> {
-                    Map<String, Object> request = buildOllamaRequest(cleanText);
-                    Map<String, Object> response = postForEmbed(buildOllamaUrl(), request);
-                    List<List<Double>> embeddings = (List<List<Double>>) response.get("embeddings");
-                    if (embeddings == null || embeddings.isEmpty()) {
-                        throw new RuntimeException("Ollama embedding result is empty");
-                    }
-                    List<Double> embedding = embeddings.get(0);
-                    if (embedding == null) {
-                        throw new RuntimeException("Ollama embedding vector is null");
-                    }
-                    yield embedding.stream().map(Double::floatValue).toList();
-                }
-            };
-
+            List<Float> result = callActiveProvider(List.of(cleanText)).get(0);
             List<Float> immutable = List.copyOf(result);
             embeddingCache.put(cleanText, immutable);
             tokenCostService.recordEmbeddingSuccess(reservation, tokenCostService.estimateTokens(cleanText));
             return immutable;
         } catch (RuntimeException ex) {
             tokenCostService.recordFailure(reservation, ex.getMessage());
+            List<Float> fallback = tryOllamaFallback(List.of(cleanText), "embedding.single_fallback", ex.getMessage()).stream()
+                    .findFirst()
+                    .orElse(null);
+            if (fallback != null) {
+                List<Float> immutable = List.copyOf(fallback);
+                embeddingCache.put(cleanText, immutable);
+                return immutable;
+            }
             throw ex;
         }
     }
 
-    @SuppressWarnings("unchecked")
     public List<List<Float>> batchGenerateEmbedding(List<String> texts) {
-        List<String> cleanTexts = texts.stream()
-                .map(this::preprocess)
-                .toList();
-
+        List<String> cleanTexts = texts.stream().map(this::preprocess).toList();
         List<List<Float>> results = new ArrayList<>(Collections.nCopies(cleanTexts.size(), null));
         List<String> missingTexts = new ArrayList<>();
         List<Integer> missingIndexes = new ArrayList<>();
@@ -155,13 +140,11 @@ public class EmbeddingService {
                 results.set(i, List.of());
                 continue;
             }
-
             List<Float> cached = embeddingCache.get(cleanText);
             if (cached != null) {
                 results.set(i, cached);
                 continue;
             }
-
             missingTexts.add(cleanText);
             missingIndexes.add(i);
         }
@@ -175,42 +158,24 @@ public class EmbeddingService {
         );
 
         try {
-            List<List<Float>> generated = switch (provider) {
-                case "siliconflow" -> callSiliconflow(missingTexts);
-                default -> {
-                    Map<String, Object> request = buildOllamaRequest(missingTexts);
-                    Map<String, Object> response = postForEmbed(buildOllamaUrl(), request);
-                    List<List<Double>> embeddings = (List<List<Double>>) response.get("embeddings");
-                    if (embeddings == null || embeddings.isEmpty()) {
-                        throw new RuntimeException("Ollama batch embedding result is empty");
-                    }
-                    List<List<Float>> generatedResults = new ArrayList<>();
-                    for (List<Double> emb : embeddings) {
-                        generatedResults.add(emb.stream().map(Double::floatValue).toList());
-                    }
-                    yield generatedResults;
-                }
-            };
-
-            for (int i = 0; i < missingTexts.size(); i++) {
-                List<Float> embedding = generated.get(i);
-                List<Float> immutable = embedding == null ? null : List.copyOf(embedding);
-                if (immutable != null) {
-                    embeddingCache.put(missingTexts.get(i), immutable);
-                }
-                results.set(missingIndexes.get(i), immutable);
-            }
-
+            List<List<Float>> generated = callActiveProvider(missingTexts);
+            fillGeneratedResults(results, missingTexts, missingIndexes, generated);
             tokenCostService.recordEmbeddingSuccess(reservation, tokenCostService.estimateTokens(missingTexts));
             return results;
-        } catch (Exception e) {
-            log.error("Batch embedding failed (batch={}, provider={})", texts.size(), provider, e);
+        } catch (RuntimeException ex) {
+            tokenCostService.recordFailure(reservation, ex.getMessage());
+            log.error("Batch embedding failed (batch={}, provider={})", texts.size(), provider, ex);
+            List<List<Float>> fallbackGenerated = tryOllamaFallback(missingTexts, "embedding.batch_fallback", ex.getMessage());
+            if (!fallbackGenerated.isEmpty()) {
+                fillGeneratedResults(results, missingTexts, missingIndexes, fallbackGenerated);
+                return results;
+            }
             for (int i = 0; i < missingTexts.size(); i++) {
-                String text = missingTexts.get(i);
+                String missingText = missingTexts.get(i);
                 try {
-                    results.set(missingIndexes.get(i), generateEmbedding(text));
-                } catch (Exception ex) {
-                    log.error("Single embedding fallback failed: {}", text.substring(0, Math.min(50, text.length())), ex);
+                    results.set(missingIndexes.get(i), generateEmbedding(missingText));
+                } catch (Exception singleEx) {
+                    log.error("Single embedding fallback failed: {}", missingText.substring(0, Math.min(50, missingText.length())), singleEx);
                     results.set(missingIndexes.get(i), null);
                 }
             }
@@ -218,36 +183,112 @@ public class EmbeddingService {
         }
     }
 
-    private String buildOllamaUrl() {
-        return baseUrl + "/api/embed";
+    private void fillGeneratedResults(List<List<Float>> results,
+                                      List<String> missingTexts,
+                                      List<Integer> missingIndexes,
+                                      List<List<Float>> generated) {
+        for (int i = 0; i < missingTexts.size(); i++) {
+            List<Float> embedding = i < generated.size() ? generated.get(i) : null;
+            List<Float> immutable = embedding == null ? null : List.copyOf(embedding);
+            if (immutable != null) {
+                embeddingCache.put(missingTexts.get(i), immutable);
+            }
+            results.set(missingIndexes.get(i), immutable);
+        }
     }
 
-    private Map<String, Object> buildOllamaRequest(Object input) {
-        Map<String, Object> request = new java.util.HashMap<>();
-        request.put("model", modelName);
-        request.put("input", input);
-        request.put("dimensions", dimension);
-        return request;
+    private List<List<Float>> tryOllamaFallback(List<String> texts, String source, String failureReason) {
+        if (!aiProperties.getCostControl().isDegradeOnEmbeddingFailure()) {
+            return List.of();
+        }
+        if ("ollama".equals(provider)) {
+            return List.of();
+        }
+
+        AiProperties.OllamaEmbedding ollama = aiProperties.getEmbedding().getOllama();
+        tokenCostService.recordDegradation(
+                "EMBEDDING_FAILURE",
+                source,
+                failureReason,
+                null,
+                provider,
+                modelName,
+                source
+        );
+
+        TokenCostService.UsageReservation fallbackReservation = tokenCostService.reserveEmbeddingRequest(
+                "ollama",
+                ollama.getModelName(),
+                source,
+                texts
+        );
+        try {
+            List<List<Float>> generated = callOllama(texts, ollama.getBaseUrl(), ollama.getModelName(), ollama.getDimension());
+            tokenCostService.recordEmbeddingSuccess(fallbackReservation, tokenCostService.estimateTokens(texts));
+            return generated;
+        } catch (RuntimeException fallbackEx) {
+            tokenCostService.recordFailure(fallbackReservation, fallbackEx.getMessage());
+            tokenCostService.recordDegradation(
+                    "EMBEDDING_FAILURE",
+                    source + "_failed",
+                    fallbackEx.getMessage(),
+                    null,
+                    "ollama",
+                    ollama.getModelName(),
+                    source
+            );
+            return List.of();
+        }
     }
 
-    @SuppressWarnings("unchecked")
+    private List<List<Float>> callActiveProvider(List<String> texts) {
+        return switch (provider) {
+            case "siliconflow" -> callSiliconflow(texts);
+            default -> callOllama(texts, baseUrl, modelName, dimension);
+        };
+    }
+
+    private List<List<Float>> callOllama(List<String> texts, String currentBaseUrl, String currentModelName, int currentDimension) {
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("model", currentModelName);
+        request.put("input", texts.size() == 1 ? texts.get(0) : texts);
+        request.put("dimensions", currentDimension);
+        Map<String, Object> response = postForEmbed(currentBaseUrl + "/api/embed", request);
+        @SuppressWarnings("unchecked")
+        List<List<Double>> embeddings = (List<List<Double>>) response.get("embeddings");
+        if (embeddings == null || embeddings.isEmpty()) {
+            throw new RuntimeException("Ollama batch embedding result is empty");
+        }
+        List<List<Float>> generatedResults = new ArrayList<>();
+        for (List<Double> emb : embeddings) {
+            if (emb == null) {
+                generatedResults.add(null);
+            } else {
+                generatedResults.add(emb.stream().map(Double::floatValue).toList());
+            }
+        }
+        return generatedResults;
+    }
+
     private Map<String, Object> postForEmbed(String url, Map<String, Object> request) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(new MediaType("application", "json", StandardCharsets.UTF_8));
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
 
+        @SuppressWarnings("unchecked")
         Map<String, Object> response = restTemplate.postForObject(url, entity, Map.class);
         if (response == null) {
-            throw new RuntimeException("Ollama ?????");
+            throw new RuntimeException("Embedding provider returned empty response");
         }
         return response;
     }
 
     @SuppressWarnings("unchecked")
     private List<List<Float>> callSiliconflow(List<String> texts) {
-        Map<String, Object> request = new java.util.HashMap<>();
+        Map<String, Object> request = new LinkedHashMap<>();
         request.put("model", modelName);
         request.put("input", texts.size() == 1 ? texts.get(0) : texts);
+        request.put("encoding_format", "float");
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(new MediaType("application", "json", StandardCharsets.UTF_8));
@@ -255,35 +296,21 @@ public class EmbeddingService {
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
 
         String url = baseUrl + "/embeddings";
-        log.info("?????? API: {} ???, model={}", texts.size(), modelName);
-        long start = System.currentTimeMillis();
-        Map<String, Object> response;
-        try {
-            response = restTemplate.postForObject(url, entity, Map.class);
-        } catch (Exception e) {
-            log.error("???? API ????: {}ms - {}", System.currentTimeMillis() - start, e.getMessage());
-            throw e;
-        }
-        log.info("???? API ????: {}ms", System.currentTimeMillis() - start);
+        Map<String, Object> response = restTemplate.postForObject(url, entity, Map.class);
         if (response == null) {
-            throw new RuntimeException("SiliconFlow ?????");
+            throw new RuntimeException("SiliconFlow returned empty response");
         }
 
         List<Map<String, Object>> data = (List<Map<String, Object>>) response.get("data");
         if (data == null || data.isEmpty()) {
-            throw new RuntimeException("SiliconFlow ??? data ????");
+            throw new RuntimeException("SiliconFlow response missing embedding data");
         }
 
         data.sort(Comparator.comparingInt(item -> ((Number) item.getOrDefault("index", 0)).intValue()));
-
         List<List<Float>> results = new ArrayList<>();
         for (Map<String, Object> item : data) {
             List<Double> embedding = (List<Double>) item.get("embedding");
-            if (embedding == null) {
-                results.add(null);
-            } else {
-                results.add(embedding.stream().map(Double::floatValue).toList());
-            }
+            results.add(embedding == null ? null : embedding.stream().map(Double::floatValue).toList());
         }
         return results;
     }

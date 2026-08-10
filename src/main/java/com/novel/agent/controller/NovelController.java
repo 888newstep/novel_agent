@@ -1,11 +1,13 @@
 package com.novel.agent.controller;
 
 import com.novel.agent.entity.*;
+import com.novel.agent.exception.CostLimitExceededException;
 import com.novel.agent.repository.*;
 import com.novel.agent.service.DeepSeekService;
 import com.novel.agent.service.MilvusAdminService;
 import com.novel.agent.service.MilvusSearchService;
 import com.novel.agent.service.MilvusService;
+import com.novel.agent.service.TokenCostService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -28,10 +30,14 @@ public class NovelController {
     private final KeyEventRepository keyEventRepository;
     private final InspirationRepository inspirationRepository;
     private final CharacterRepository characterRepository;
+    private final ArtifactRepository artifactRepository;
+    private final SkillRepository skillRepository;
+    private final ItemLogRepository itemLogRepository;
     private final DeepSeekService deepSeekService;
     private final MilvusService milvusService;
     private final MilvusSearchService milvusSearchService;
     private final MilvusAdminService milvusAdminService;
+    private final TokenCostService tokenCostService;
 
     // =============================================
     // 小说管理
@@ -87,17 +93,81 @@ public class NovelController {
 
         String systemPrompt = buildSystemPrompt(style, worldSetting, memory, promptId);
         String userPrompt = String.format("??%s???????%s???????????", style, topic);
-        String generated = deepSeekService.chat(systemPrompt, userPrompt);
+        TokenCostService.SettingsSnapshot settings = tokenCostService.getSettingsSnapshot();
 
-        Map<String, Object> result = new HashMap<>();
-        result.put("topic", topic);
-        result.put("style", style);
-        result.put("currentChapterNum", currentChapterNum);
-        result.put("content", generated);
-        result.put("memoryCount", memory.getTotalCount());
-        result.put("memory", buildMemorySummary(memory));
-        result.put("promptChars", systemPrompt.length() + userPrompt.length());
-        return ResponseEntity.ok(result);
+        try {
+            String generated = deepSeekService.chat(novelId, systemPrompt, userPrompt);
+            return ResponseEntity.ok(buildGenerationResponse(
+                    novelId,
+                    topic,
+                    style,
+                    currentChapterNum,
+                    promptId,
+                    worldSetting,
+                    memory,
+                    systemPrompt,
+                    userPrompt,
+                    generated,
+                    false,
+                    null
+            ));
+        } catch (CostLimitExceededException ex) {
+            if (!settings.isDegradeOnBudgetExceeded()) {
+                throw ex;
+            }
+            tokenCostService.recordDegradation(
+                    "BUDGET_LIMIT",
+                    "outline_only_response",
+                    ex.getMessage(),
+                    novelId,
+                    "controller",
+                    "outline",
+                    "chat.generate"
+            );
+            String degradedContent = buildDegradedOutline(topic, style, currentChapterNum, memory, "budget_limit");
+            return ResponseEntity.ok(buildGenerationResponse(
+                    novelId,
+                    topic,
+                    style,
+                    currentChapterNum,
+                    promptId,
+                    worldSetting,
+                    memory,
+                    systemPrompt,
+                    userPrompt,
+                    degradedContent,
+                    true,
+                    buildDegradationPolicy("budget_limit", "outline_only_response", ex.getMessage())
+            ));
+        } catch (RuntimeException ex) {
+            if (!settings.isDegradeOnModelFailure()) {
+                throw ex;
+            }
+            tokenCostService.recordDegradation(
+                    "MODEL_FAILURE",
+                    "outline_only_response",
+                    ex.getMessage(),
+                    novelId,
+                    "controller",
+                    "outline",
+                    "chat.generate"
+            );
+            String degradedContent = buildDegradedOutline(topic, style, currentChapterNum, memory, "model_failure");
+            return ResponseEntity.ok(buildGenerationResponse(
+                    novelId,
+                    topic,
+                    style,
+                    currentChapterNum,
+                    promptId,
+                    worldSetting,
+                    memory,
+                    systemPrompt,
+                    userPrompt,
+                    degradedContent,
+                    true,
+                    buildDegradationPolicy("model_failure", "outline_only_response", ex.getMessage())
+            ));
+        }
     }
 
     // =============================================
@@ -145,6 +215,8 @@ public class NovelController {
         response.put("currentChapterNum", currentChapterNum);
         response.put("memory", memory);
         response.put("summary", buildMemorySummary(memory));
+        response.put("memoryLayers", buildMemoryLayers(memory));
+        response.put("consistencyCheck", buildConsistencyCheck(novelId, memory, currentChapterNum));
         return ResponseEntity.ok(response);
     }
 
@@ -460,6 +532,644 @@ public class NovelController {
         summary.put("relations", memory.getRelations().size());
         summary.put("total", memory.getTotalCount());
         return summary;
+    }
+
+    private Map<String, Object> buildMemoryLayers(MilvusSearchService.WritingMemory memory) {
+        Map<String, Object> layers = new LinkedHashMap<>();
+        layers.put("recentChapterContext", buildLayer(memory.getRecentChapters().size(), collectValues(memory.getRecentChapters(), "chapter_num", 3)));
+        layers.put("sceneSegments", buildLayer(memory.getSegments().size(), collectValues(memory.getSegments(), "segment_type", 3)));
+        layers.put("keyCharacters", buildLayer(memory.getCharacters().size(), collectValues(memory.getCharacters(), "name", 3)));
+        layers.put("unresolvedHooks", buildLayer(memory.getHooks().size(), collectValues(memory.getHooks(), "title", 3)));
+        layers.put("worldFacts", buildLayer(memory.getItems().size() + memory.getFactions().size() + memory.getRelations().size(), collectWorldFacts(memory)));
+        return layers;
+    }
+
+    private Map<String, Object> buildConsistencyCheck(Long novelId,
+                                                      MilvusSearchService.WritingMemory memory,
+                                                      Integer currentChapterNum) {
+        List<String> warnings = new ArrayList<>();
+
+        if (memory.getTotalCount() == 0) {
+            warnings.add("no_memory_context");
+        }
+        if (memory.getRecentChapters().isEmpty() && memory.getSegments().isEmpty()) {
+            warnings.add("missing_story_context");
+        }
+        if (memory.getCharacters().isEmpty()) {
+            warnings.add("missing_character_memory");
+        }
+
+        collectFutureChapterWarnings(warnings, "recentChapters", memory.getRecentChapters(), currentChapterNum);
+        collectFutureChapterWarnings(warnings, "segments", memory.getSegments(), currentChapterNum);
+        collectFutureChapterWarnings(warnings, "hooks", memory.getHooks(), currentChapterNum);
+
+        List<String> duplicateCharacters = collectDuplicateValues(memory.getCharacters(), "name");
+        duplicateCharacters.forEach(name -> warnings.add("duplicate_character_context:" + name));
+
+        List<String> duplicateHooks = collectDuplicateValues(memory.getHooks(), "title");
+        duplicateHooks.forEach(title -> warnings.add("duplicate_hook_context:" + title));
+
+        List<String> relationConflicts = collectRelationConflicts(memory.getRelations());
+        relationConflicts.forEach(conflict -> warnings.add("relation_conflict:" + conflict));
+
+        collectResolvedEventWarnings(warnings, novelId, memory.getHooks(), currentChapterNum);
+        collectItemStatusWarnings(warnings, novelId, memory.getItems(), currentChapterNum);
+
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.put("novelId", novelId);
+        metrics.put("currentChapterNum", currentChapterNum);
+        metrics.put("recentChapters", memory.getRecentChapters().size());
+        metrics.put("segments", memory.getSegments().size());
+        metrics.put("hooks", memory.getHooks().size());
+        metrics.put("characters", memory.getCharacters().size());
+        metrics.put("relations", memory.getRelations().size());
+        metrics.put("duplicateCharacterCount", duplicateCharacters.size());
+        metrics.put("duplicateHookCount", duplicateHooks.size());
+        metrics.put("relationConflictCount", relationConflicts.size());
+        metrics.put("resolvedEventReuseCount", countWarningsByPrefix(warnings, "resolved_event_reused:"));
+        metrics.put("futureItemLeakCount", countWarningsByPrefix(warnings, "future_item_first_appear:"));
+        metrics.put("itemStatusConflictCount", countWarningsByPrefix(warnings, "item_status_conflict:"));
+        metrics.put("futureItemMutationCount", countWarningsByPrefix(warnings, "future_item_mutation:"));
+
+        Map<String, Object> check = new LinkedHashMap<>();
+        check.put("status", warnings.isEmpty() ? "pass" : "warn");
+        check.put("warningCount", warnings.size());
+        check.put("warnings", warnings);
+        check.put("metrics", metrics);
+        return check;
+    }
+
+    private void collectResolvedEventWarnings(List<String> warnings,
+                                             Long novelId,
+                                             List<Map<String, Object>> hooks,
+                                             Integer currentChapterNum) {
+        if (hooks == null || hooks.isEmpty()) {
+            return;
+        }
+        Map<Long, KeyEvent> eventIndex = keyEventRepository.findByNovelIdOrderByChapterNumAsc(novelId).stream()
+                .collect(java.util.stream.Collectors.toMap(KeyEvent::getId, event -> event, (left, right) -> left, LinkedHashMap::new));
+
+        for (Map<String, Object> hook : hooks) {
+            long eventId = parseLong(hook.get("mysql_event_id"));
+            if (eventId <= 0) {
+                continue;
+            }
+            KeyEvent event = eventIndex.get(eventId);
+            if (event == null) {
+                continue;
+            }
+            if (Boolean.TRUE.equals(event.getResolved())) {
+                addUniqueWarning(warnings, "resolved_event_reused:" + firstNonBlank(event.getTitle(), String.valueOf(eventId)));
+                continue;
+            }
+            if (currentChapterNum != null && event.getResolvedAt() != null && event.getResolvedAt() <= currentChapterNum) {
+                addUniqueWarning(warnings, "resolved_event_reused:" + firstNonBlank(event.getTitle(), String.valueOf(eventId)));
+            }
+        }
+    }
+
+    private void collectItemStatusWarnings(List<String> warnings,
+                                           Long novelId,
+                                           List<Map<String, Object>> items,
+                                           Integer currentChapterNum) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        for (Map<String, Object> item : items) {
+            long itemId = parseLong(item.get("mysql_item_id"));
+            int itemType = parseInt(item.get("item_type"));
+            String itemName = firstNonBlank(item.get("name"), "item-" + itemId);
+            if (itemId <= 0) {
+                continue;
+            }
+            if (itemType == 0) {
+                artifactRepository.findById(itemId).ifPresent(artifact -> inspectArtifactWarnings(warnings, novelId, artifact, currentChapterNum, itemName));
+            } else if (itemType == 1) {
+                skillRepository.findById(itemId).ifPresent(skill -> inspectSkillWarnings(warnings, novelId, skill, currentChapterNum, itemName));
+            }
+        }
+    }
+
+    private void inspectArtifactWarnings(List<String> warnings,
+                                         Long novelId,
+                                         Artifact artifact,
+                                         Integer currentChapterNum,
+                                         String itemName) {
+        if (currentChapterNum != null && artifact.getFirstAppear() != null && artifact.getFirstAppear() > currentChapterNum) {
+            addUniqueWarning(warnings, "future_item_first_appear:" + itemName);
+        }
+        String status = firstNonBlank(artifact.getStatus());
+        if (!status.isBlank() && !"active".equalsIgnoreCase(status)) {
+            addUniqueWarning(warnings, "item_status_conflict:" + itemName + ":" + status);
+        }
+        if (currentChapterNum != null && hasFutureItemMutation(novelId, "artifact", artifact.getId(), currentChapterNum)) {
+            addUniqueWarning(warnings, "future_item_mutation:" + itemName);
+        }
+    }
+
+    private void inspectSkillWarnings(List<String> warnings,
+                                      Long novelId,
+                                      Skill skill,
+                                      Integer currentChapterNum,
+                                      String itemName) {
+        if (currentChapterNum != null && skill.getFirstAppear() != null && skill.getFirstAppear() > currentChapterNum) {
+            addUniqueWarning(warnings, "future_item_first_appear:" + itemName);
+        }
+        String stage = firstNonBlank(skill.getStage());
+        if (!stage.isBlank() && List.of("forbidden", "destroyed", "sealed").contains(stage.toLowerCase(Locale.ROOT))) {
+            addUniqueWarning(warnings, "item_status_conflict:" + itemName + ":" + stage);
+        }
+        if (currentChapterNum != null && hasFutureItemMutation(novelId, "skill", skill.getId(), currentChapterNum)) {
+            addUniqueWarning(warnings, "future_item_mutation:" + itemName);
+        }
+    }
+
+    private boolean hasFutureItemMutation(Long novelId, String itemType, Long itemId, Integer currentChapterNum) {
+        return itemLogRepository.findByNovelIdAndItemTypeAndItemId(novelId, itemType, itemId).stream()
+                .anyMatch(log -> log.getChapterNum() != null && log.getChapterNum() > currentChapterNum);
+    }
+
+    private void addUniqueWarning(List<String> warnings, String warning) {
+        if (!warnings.contains(warning)) {
+            warnings.add(warning);
+        }
+    }
+
+    private int countWarningsByPrefix(List<String> warnings, String prefix) {
+        return (int) warnings.stream().filter(warning -> warning.startsWith(prefix)).count();
+    }
+
+    private long parseLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(value.toString());
+        } catch (NumberFormatException ex) {
+            return 0L;
+        }
+    }
+
+    private int parseInt(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value.toString());
+        } catch (NumberFormatException ex) {
+            return 0;
+        }
+    }
+    private Map<String, Object> buildGenerationTrace(String promptId,
+                                                     String topic,
+                                                     String style,
+                                                     String worldSetting,
+                                                     MilvusSearchService.WritingMemory memory,
+                                                     String systemPrompt,
+                                                     String userPrompt,
+                                                     String generated) {
+        Map<String, Object> trace = new LinkedHashMap<>();
+        Map<String, Object> selectedMemoryBlocks = buildPromptMemoryBlocks(memory);
+        trace.put("promptId", promptId);
+        trace.put("topic", topic);
+        trace.put("style", style);
+        trace.put("selectedMemoryBlocks", selectedMemoryBlocks);
+        trace.put("droppedCandidates", collectDroppedCandidates(selectedMemoryBlocks));
+        trace.put("contextStats", buildContextStats(worldSetting, systemPrompt, userPrompt, generated));
+        trace.put("tokenCost", buildTokenCostTrace(systemPrompt, userPrompt, generated));
+        return trace;
+    }
+
+    private Map<String, Object> buildPromptMemoryBlocks(MilvusSearchService.WritingMemory memory) {
+        Map<String, Object> blocks = new LinkedHashMap<>();
+        blocks.put("recentChapterContext", buildPromptTraceBlock(memory.getRecentChapters(), 2, item ->
+                String.format("chapter=%s %s", firstNonBlank(item.get("chapter_num")),
+                        trimText(firstNonBlank(item.get("summary"), item.get("content"), item.get("title"), "context"), 48))));
+        blocks.put("sceneSegments", buildPromptTraceBlock(memory.getSegments(), 3, item ->
+                trimText(firstNonBlank(item.get("content"), item.get("segment_type"), "segment"), 60)));
+        blocks.put("unresolvedHooks", buildPromptTraceBlock(memory.getHooks(), 2, item ->
+                String.format("%s:%s", firstNonBlank(item.get("title"), "hook"),
+                        trimText(firstNonBlank(item.get("description"), ""), 48))));
+        blocks.put("keyCharacters", buildPromptTraceBlock(memory.getCharacters(), 3, item ->
+                String.format("%s:%s", firstNonBlank(item.get("name"), "character"),
+                        trimText(firstNonBlank(item.get("char_text"), item.get("description"), ""), 48))));
+        blocks.put("items", buildPromptTraceBlock(memory.getItems(), 1, item ->
+                String.format("%s:%s", firstNonBlank(item.get("name"), "item"),
+                        trimText(firstNonBlank(item.get("item_text"), item.get("description"), ""), 40))));
+        blocks.put("factions", buildPromptTraceBlock(memory.getFactions(), 1, item ->
+                String.format("%s:%s", firstNonBlank(item.get("title"), "faction"),
+                        trimText(firstNonBlank(item.get("content"), item.get("description"), ""), 40))));
+        blocks.put("relations", buildPromptTraceBlock(memory.getRelations(), 2, item ->
+                String.format("%s-%s-%s", firstNonBlank(item.get("source_name"), "source"),
+                        firstNonBlank(item.get("relation_type"), "relation"),
+                        firstNonBlank(item.get("target_name"), "target"))));
+        return blocks;
+    }
+
+    private Map<String, Object> buildPromptTraceBlock(List<Map<String, Object>> items,
+                                                      int promptLimit,
+                                                      java.util.function.Function<Map<String, Object>, String> formatter) {
+        int totalCount = items == null ? 0 : items.size();
+        int usedCount = Math.min(totalCount, Math.max(promptLimit, 0));
+        List<String> samples = items == null ? List.of() : items.stream()
+                .limit(usedCount)
+                .map(formatter)
+                .map(value -> trimText(firstNonBlank(value), 80))
+                .toList();
+
+        Map<String, Object> block = new LinkedHashMap<>();
+        block.put("retrievedCount", totalCount);
+        block.put("usedInPrompt", usedCount);
+        block.put("omittedCount", Math.max(totalCount - usedCount, 0));
+        block.put("samples", samples);
+        return block;
+    }
+
+    private List<Map<String, Object>> collectDroppedCandidates(Map<String, Object> selectedMemoryBlocks) {
+        List<Map<String, Object>> dropped = new ArrayList<>();
+        for (Map.Entry<String, Object> entry : selectedMemoryBlocks.entrySet()) {
+            if (!(entry.getValue() instanceof Map<?, ?> block)) {
+                continue;
+            }
+            Object omittedValue = block.get("omittedCount");
+            int omittedCount = omittedValue instanceof Number number ? number.intValue() : 0;
+            if (omittedCount <= 0) {
+                continue;
+            }
+            Map<String, Object> droppedItem = new LinkedHashMap<>();
+            droppedItem.put("block", entry.getKey());
+            droppedItem.put("omittedCount", omittedCount);
+            dropped.add(droppedItem);
+        }
+        return dropped;
+    }
+
+    private Map<String, Object> buildContextStats(String worldSetting,
+                                                  String systemPrompt,
+                                                  String userPrompt,
+                                                  String generated) {
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("worldSettingChars", worldSetting == null ? 0 : worldSetting.length());
+        stats.put("systemPromptChars", systemPrompt == null ? 0 : systemPrompt.length());
+        stats.put("userPromptChars", userPrompt == null ? 0 : userPrompt.length());
+        stats.put("totalPromptChars", (systemPrompt == null ? 0 : systemPrompt.length()) + (userPrompt == null ? 0 : userPrompt.length()));
+        stats.put("generatedChars", generated == null ? 0 : generated.length());
+        return stats;
+    }
+
+    private Map<String, Object> buildTokenCostTrace(String systemPrompt,
+                                                    String userPrompt,
+                                                    String generated) {
+        Map<String, Object> trace = new LinkedHashMap<>();
+        TokenCostService.SettingsSnapshot settings = tokenCostService.getSettingsSnapshot();
+        String fullPrompt = buildFullPrompt(systemPrompt, userPrompt);
+        int estimatedInputTokens = tokenCostService.estimateTokens(fullPrompt);
+        int reservedOutputTokens = settings == null ? 0 : Math.max(settings.getReservedCompletionTokens(), 0);
+
+        trace.put("currency", settings == null ? "USD" : firstNonBlank(settings.getCurrency(), "USD"));
+        trace.put("measurementMode", "token_cost_service_record + heuristic_fallback");
+        trace.put("pricing", buildPricingTrace(settings));
+        trace.put("preCallEstimate", buildTokenSnapshot(estimatedInputTokens, reservedOutputTokens, settings, "reservation_estimate"));
+
+        TokenCostService.UsageRecord usageRecord = tokenCostService.getRecentRecords(5).stream()
+                .filter(record -> "chat.generate".equals(record.getSource()))
+                .findFirst()
+                .orElse(null);
+
+        if (usageRecord != null) {
+            Map<String, Object> actualUsage = new LinkedHashMap<>();
+            actualUsage.put("requestId", usageRecord.getRequestId());
+            actualUsage.put("status", usageRecord.getStatus());
+            actualUsage.put("provider", usageRecord.getProvider());
+            actualUsage.put("model", usageRecord.getModel());
+            actualUsage.put("inputTokens", usageRecord.getInputTokens());
+            actualUsage.put("outputTokens", usageRecord.getOutputTokens());
+            actualUsage.put("totalTokens", usageRecord.getTotalTokens());
+            actualUsage.put("estimatedCostUsd", usageRecord.getEstimatedCostUsd());
+            actualUsage.put("charCount", usageRecord.getCharCount());
+            actualUsage.put("measurementMode", "recorded_by_token_cost_service");
+            trace.put("postCallObservation", actualUsage);
+        } else {
+            int observedOutputTokens = tokenCostService.estimateTokens(generated == null ? "" : generated);
+            trace.put("postCallObservation", buildTokenSnapshot(estimatedInputTokens, observedOutputTokens, settings, "heuristic_fallback"));
+        }
+        return trace;
+    }
+
+    private Map<String, Object> buildPricingTrace(TokenCostService.SettingsSnapshot settings) {
+        Map<String, Object> pricing = new LinkedHashMap<>();
+        if (settings == null) {
+            pricing.put("inputPerMillionTokens", 0D);
+            pricing.put("outputPerMillionTokens", 0D);
+            pricing.put("reservedCompletionTokens", 0);
+            return pricing;
+        }
+        pricing.put("inputPerMillionTokens", settings.getInputPerMillionTokens());
+        pricing.put("outputPerMillionTokens", settings.getOutputPerMillionTokens());
+        pricing.put("reservedCompletionTokens", settings.getReservedCompletionTokens());
+        return pricing;
+    }
+
+    private Map<String, Object> buildTokenSnapshot(int inputTokens,
+                                                   int outputTokens,
+                                                   TokenCostService.SettingsSnapshot settings,
+                                                   String mode) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("inputTokens", inputTokens);
+        snapshot.put("outputTokens", outputTokens);
+        snapshot.put("totalTokens", inputTokens + outputTokens);
+        snapshot.put("estimatedCostUsd", roundCost(calculateChatCostUsd(settings, inputTokens, outputTokens)));
+        snapshot.put("measurementMode", mode);
+        return snapshot;
+    }
+
+    private double calculateChatCostUsd(TokenCostService.SettingsSnapshot settings,
+                                        int inputTokens,
+                                        int outputTokens) {
+        if (settings == null) {
+            return 0D;
+        }
+        return inputTokens / 1_000_000D * settings.getInputPerMillionTokens()
+                + outputTokens / 1_000_000D * settings.getOutputPerMillionTokens();
+    }
+
+    private double roundCost(double value) {
+        return Math.round(value * 10000D) / 10000D;
+    }
+
+    private String buildFullPrompt(String systemPrompt, String userPrompt) {
+        if (systemPrompt == null || systemPrompt.isEmpty()) {
+            return userPrompt == null ? "" : userPrompt;
+        }
+        return "[SYSTEM]\n" + systemPrompt + "\n\n[USER]\n" + (userPrompt == null ? "" : userPrompt);
+    }
+
+    private Map<String, Object> buildGenerationResponse(Long novelId,
+                                                       String topic,
+                                                       String style,
+                                                       Integer currentChapterNum,
+                                                       String promptId,
+                                                       String worldSetting,
+                                                       MilvusSearchService.WritingMemory memory,
+                                                       String systemPrompt,
+                                                       String userPrompt,
+                                                       String generated,
+                                                       boolean degraded,
+                                                       Map<String, Object> degradationPolicy) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("topic", topic);
+        result.put("style", style);
+        result.put("currentChapterNum", currentChapterNum);
+        result.put("content", generated);
+        result.put("memoryCount", memory.getTotalCount());
+        result.put("memory", buildMemorySummary(memory));
+        result.put("memoryLayers", buildMemoryLayers(memory));
+        result.put("consistencyCheck", buildConsistencyCheck(novelId, memory, currentChapterNum));
+        result.put("generationTrace", buildGenerationTrace(promptId, topic, style, worldSetting, memory, systemPrompt, userPrompt, generated));
+        result.put("postGenerationCheck", buildPostGenerationCheck(topic, generated));
+        result.put("promptChars", systemPrompt.length() + userPrompt.length());
+        result.put("degraded", degraded);
+        if (degradationPolicy != null) {
+            result.put("degradationPolicy", degradationPolicy);
+        }
+        return result;
+    }
+
+    private Map<String, Object> buildDegradationPolicy(String trigger, String strategy, String reason) {
+        Map<String, Object> policy = new LinkedHashMap<>();
+        policy.put("trigger", trigger);
+        policy.put("strategy", strategy);
+        policy.put("reason", reason == null ? "unknown" : reason);
+        policy.put("fallbackOutput", "outline_only");
+        return policy;
+    }
+
+    private String buildDegradedOutline(String topic,
+                                        String style,
+                                        Integer currentChapterNum,
+                                        MilvusSearchService.WritingMemory memory,
+                                        String mode) {
+        List<String> anchors = new ArrayList<>();
+        collectAnchorSamples(memory.getRecentChapters(), "chapter", anchors, "content");
+        collectAnchorSamples(memory.getSegments(), "segment", anchors, "content");
+        collectAnchorSamples(memory.getHooks(), "hook", anchors, "title");
+        collectAnchorSamples(memory.getCharacters(), "character", anchors, "name");
+        collectAnchorSamples(memory.getItems(), "item", anchors, "name");
+        if (anchors.isEmpty()) {
+            anchors.add("keep the current conflict focused on the topic");
+        }
+
+        StringBuilder builder = new StringBuilder();
+        builder.append("[DEGRADED MODE: ").append(mode).append("]\n");
+        builder.append("Topic: ").append(topic).append("\n");
+        builder.append("Style: ").append(style).append("\n");
+        builder.append("Current chapter: ").append(currentChapterNum == null ? "unknown" : currentChapterNum).append("\n");
+        builder.append("Recommended outline:\n");
+        for (int i = 0; i < Math.min(5, anchors.size()); i++) {
+            builder.append(i + 1).append(". ").append(anchors.get(i)).append("\n");
+        }
+        builder.append("Closing goal: end the scene with a hook tied to the topic.");
+        return builder.toString();
+    }
+
+    private void collectAnchorSamples(List<Map<String, Object>> blocks,
+                                      String label,
+                                      List<String> anchors,
+                                      String field) {
+        if (blocks == null) {
+            return;
+        }
+        for (Map<String, Object> block : blocks) {
+            if (block == null) {
+                continue;
+            }
+            Object value = block.get(field);
+            if (value == null) {
+                continue;
+            }
+            String text = value.toString().trim();
+            if (text.isEmpty()) {
+                continue;
+            }
+            anchors.add(label + ": " + text);
+            if (anchors.size() >= 8) {
+                return;
+            }
+        }
+    }
+
+    private Map<String, Object> buildPostGenerationCheck(String topic, String generated) {
+        String content = generated == null ? "" : generated.trim();
+        List<String> warnings = new ArrayList<>();
+
+        if (content.isEmpty()) {
+            warnings.add("empty_output");
+        }
+        if (!content.isEmpty() && content.length() < 80) {
+            warnings.add("content_too_short");
+        }
+        if (countOccurrences(content, "...") + countOccurrences(content, "……") >= 4) {
+            warnings.add("excessive_ellipsis");
+        }
+
+        for (String phrase : List.of("suddenly", "all of a sudden", "without warning")) {
+            if (content.toLowerCase(Locale.ROOT).contains(phrase)) {
+                warnings.add("banned_phrase:" + phrase.replace(' ', '_'));
+            }
+        }
+
+        if (hasRepeatedOpening(content)) {
+            warnings.add("repeated_opening_pattern");
+        }
+
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.put("topic", topic);
+        metrics.put("charCount", content.length());
+        metrics.put("paragraphCount", countParagraphs(content));
+        metrics.put("lineCount", content.isEmpty() ? 0 : content.split("\\R").length);
+        metrics.put("sentenceCount", countSentences(content));
+
+        Map<String, Object> check = new LinkedHashMap<>();
+        check.put("status", warnings.isEmpty() ? "pass" : "warn");
+        check.put("warningCount", warnings.size());
+        check.put("warnings", warnings);
+        check.put("metrics", metrics);
+        return check;
+    }
+
+    private boolean hasRepeatedOpening(String content) {
+        List<String> normalizedLines = Arrays.stream(content.split("\\R"))
+                .map(String::trim)
+                .filter(line -> !line.isBlank())
+                .map(line -> line.substring(0, Math.min(line.length(), 16)).toLowerCase(Locale.ROOT))
+                .toList();
+        Set<String> seen = new HashSet<>();
+        for (String opening : normalizedLines) {
+            if (!seen.add(opening)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int countParagraphs(String content) {
+        if (content == null || content.isBlank()) {
+            return 0;
+        }
+        return (int) Arrays.stream(content.split("\\R\\s*\\R"))
+                .map(String::trim)
+                .filter(part -> !part.isBlank())
+                .count();
+    }
+
+    private int countSentences(String content) {
+        if (content == null || content.isBlank()) {
+            return 0;
+        }
+        return (int) Arrays.stream(content.split("[.!?。！？]+"))
+                .map(String::trim)
+                .filter(part -> !part.isBlank())
+                .count();
+    }
+
+    private int countOccurrences(String content, String target) {
+        if (content == null || content.isEmpty() || target == null || target.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        int index = 0;
+        while ((index = content.indexOf(target, index)) >= 0) {
+            count++;
+            index += target.length();
+        }
+        return count;
+    }
+    private Map<String, Object> buildLayer(int count, List<String> samples) {
+        Map<String, Object> layer = new LinkedHashMap<>();
+        layer.put("count", count);
+        layer.put("samples", samples);
+        return layer;
+    }
+
+    private List<String> collectValues(List<Map<String, Object>> items, String field, int limit) {
+        return items.stream()
+                .map(item -> firstNonBlank(item.get(field)))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .limit(limit)
+                .toList();
+    }
+
+    private List<String> collectWorldFacts(MilvusSearchService.WritingMemory memory) {
+        List<String> facts = new ArrayList<>();
+        facts.addAll(collectValues(memory.getItems(), "name", 2));
+        facts.addAll(collectValues(memory.getFactions(), "title", 2));
+        facts.addAll(memory.getRelations().stream()
+                .map(item -> firstNonBlank(item.get("source_name")) + "-" + firstNonBlank(item.get("relation_type")) + "-" + firstNonBlank(item.get("target_name")))
+                .filter(value -> !value.isBlank() && !value.equals("--"))
+                .distinct()
+                .limit(2)
+                .toList());
+        return facts.stream().filter(value -> !value.isBlank()).limit(4).toList();
+    }
+
+    private void collectFutureChapterWarnings(List<String> warnings,
+                                              String section,
+                                              List<Map<String, Object>> items,
+                                              Integer currentChapterNum) {
+        if (currentChapterNum == null) {
+            return;
+        }
+        boolean leaked = items.stream()
+                .map(item -> item.get("chapter_num"))
+                .filter(Objects::nonNull)
+                .map(Object::toString)
+                .map(value -> {
+                    try {
+                        return Integer.parseInt(value);
+                    } catch (NumberFormatException ex) {
+                        return Integer.MIN_VALUE;
+                    }
+                })
+                .anyMatch(chapterNum -> chapterNum > currentChapterNum);
+        if (leaked) {
+            warnings.add("future_chapter_leak:" + section);
+        }
+    }
+
+    private List<String> collectDuplicateValues(List<Map<String, Object>> items, String field) {
+        Map<String, Long> counts = items.stream()
+                .map(item -> firstNonBlank(item.get(field)))
+                .filter(value -> !value.isBlank())
+                .collect(java.util.stream.Collectors.groupingBy(value -> value, LinkedHashMap::new, java.util.stream.Collectors.counting()));
+        return counts.entrySet().stream()
+                .filter(entry -> entry.getValue() > 1)
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
+    private List<String> collectRelationConflicts(List<Map<String, Object>> relations) {
+        Map<String, Set<String>> grouped = new LinkedHashMap<>();
+        for (Map<String, Object> relation : relations) {
+            String source = firstNonBlank(relation.get("source_name"));
+            String target = firstNonBlank(relation.get("target_name"));
+            String relationType = firstNonBlank(relation.get("relation_type"));
+            if (source.isBlank() || target.isBlank() || relationType.isBlank()) {
+                continue;
+            }
+            String pairKey = source + "->" + target;
+            grouped.computeIfAbsent(pairKey, key -> new LinkedHashSet<>()).add(relationType);
+        }
+        return grouped.entrySet().stream()
+                .filter(entry -> entry.getValue().size() > 1)
+                .map(Map.Entry::getKey)
+                .toList();
     }
 
     private String firstNonBlank(Object... values) {

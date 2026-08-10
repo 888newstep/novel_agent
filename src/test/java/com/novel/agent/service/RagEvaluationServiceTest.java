@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -39,10 +40,19 @@ class RagEvaluationServiceTest {
 
         assertEquals(queryCount, firstReport.getQueryCount());
         assertEquals(queryCount, firstReport.getDetails().size());
-        assertEquals(3, firstReport.getCategorySummaries().size());
+        assertEquals(5, firstReport.getCategorySummaries().size());
         assertEquals(100.0, firstReport.getRecallAtK(), 0.0001);
         assertEquals(100.0, firstReport.getPrecisionAtK(), 0.0001);
         assertEquals(1.0, firstReport.getMrr(), 0.0001);
+        double expectedContextChars = service.getTestCases().stream()
+                .mapToInt(testCase -> testCase.getQuery().length())
+                .average()
+                .orElseThrow();
+        assertEquals(expectedContextChars, firstReport.getAvgRetrievedContextChars(), 0.0001);
+        assertEquals(Math.ceil(expectedContextChars / 4.0), firstReport.getAvgRetrievedContextTokens(), 0.0001);
+        assertTrue(firstReport.getP95LatencyMs() >= 0.0);
+        assertEquals("writing-default-v1", firstReport.getProfileName());
+        assertEquals("2026-08-09", firstReport.getDatasetVersion());
         assertNull(firstReport.getComparison());
         assertEquals(1, firstReport.getHistory().size());
 

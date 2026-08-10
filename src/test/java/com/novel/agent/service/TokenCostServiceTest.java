@@ -65,6 +65,64 @@ class TokenCostServiceTest {
         assertEquals(1, records.size());
         assertEquals("BLOCKED", records.get(0).getStatus());
     }
+    @Test
+    void enforcesPerNovelAndPerModelBudgetsInStrictMode() {
+        AiProperties properties = new AiProperties();
+        properties.getCostControl().setStrictMode(true);
+        properties.getCostControl().setPerNovelDailyTokenBudget(10);
+        properties.getCostControl().setPerModelDailyTokenBudget(10);
+
+        TokenCostService service = new TokenCostService(properties);
+
+        TokenCostService.UsageReservation first = service.reserveChatRequest(
+                99L,
+                "deepseek",
+                "deepseek-chat",
+                "chat.generate",
+                "????????",
+                0
+        );
+        service.recordChatSuccess(first, "ok", 8, 0);
+
+        assertThrows(CostLimitExceededException.class, () -> service.reserveChatRequest(
+                99L,
+                "deepseek",
+                "deepseek-chat",
+                "chat.generate",
+                "????????",
+                0
+        ));
+    }
+
+    @Test
+    void exposesPerNovelPerModelAndDegradationSummaries() {
+        AiProperties properties = new AiProperties();
+        properties.getCostControl().getPricing().setInputPerMillionTokens(1000000.0);
+        properties.getCostControl().getPricing().setOutputPerMillionTokens(1000000.0);
+
+        TokenCostService service = new TokenCostService(properties);
+
+        TokenCostService.UsageReservation first = service.reserveChatRequest(
+                7L,
+                "deepseek",
+                "deepseek-chat",
+                "chat.generate",
+                "hello novel world",
+                10
+        );
+        service.recordChatSuccess(first, "chapter output", 8, 4);
+        service.recordDegradation("MODEL_FAILURE", "outline_only_response", "mock failure", 7L, "deepseek", "deepseek-chat", "chat.generate");
+
+        TokenCostService.DashboardSummary summary = service.getDashboardSummary();
+        assertEquals(1, summary.getByNovel().size());
+        assertEquals(1, summary.getByModel().size());
+        assertEquals("novelId=7", summary.getByNovel().get(0).getLabel());
+        assertEquals("deepseek:deepseek-chat", summary.getByModel().get(0).getLabel());
+        assertEquals(1, summary.getRecentDegradations().size());
+        assertEquals("MODEL_FAILURE", summary.getRecentDegradations().get(0).getTrigger());
+    }
+
+
 }
 
 

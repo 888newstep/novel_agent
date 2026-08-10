@@ -82,6 +82,13 @@ public class AiProperties {
         private long monthlyTokenBudget = 5000000;
         private double dailyBudgetUsd = 5.0;
         private double monthlyBudgetUsd = 100.0;
+        private long perNovelDailyTokenBudget = 0;
+        private double perNovelDailyBudgetUsd = 0.0;
+        private long perModelDailyTokenBudget = 0;
+        private double perModelDailyBudgetUsd = 0.0;
+        private boolean degradeOnBudgetExceeded = true;
+        private boolean degradeOnModelFailure = true;
+        private boolean degradeOnEmbeddingFailure = true;
         private Pricing pricing = new Pricing();
     }
 

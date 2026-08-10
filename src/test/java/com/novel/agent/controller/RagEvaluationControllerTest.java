@@ -48,6 +48,7 @@ class RagEvaluationControllerTest {
                 10.0,
                 10.0,
                 10.0,
+                10.0,
                 100.0,
                 1,
                 List.of()

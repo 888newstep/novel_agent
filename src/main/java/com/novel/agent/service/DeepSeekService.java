@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -39,13 +40,19 @@ public class DeepSeekService {
     }
 
     public String chat(String systemPrompt, String userPrompt) {
+        return chat(null, systemPrompt, userPrompt);
+    }
+
+    public String chat(Long novelId, String systemPrompt, String userPrompt) {
         String fullPrompt = buildPrompt(systemPrompt, userPrompt);
+        int reservedCompletionTokens = aiProperties.getCostControl().getReservedCompletionTokens();
         TokenCostService.UsageReservation reservation = tokenCostService.reserveChatRequest(
+                novelId,
                 currentProvider(),
                 currentChatModelName(),
                 "chat.generate",
                 fullPrompt,
-                aiProperties.getCostControl().getReservedCompletionTokens()
+                reservedCompletionTokens
         );
         try {
             String response = chatLanguageModel.generate(fullPrompt);
@@ -54,23 +61,59 @@ public class DeepSeekService {
             return response;
         } catch (RuntimeException ex) {
             tokenCostService.recordFailure(reservation, ex.getMessage());
+            if (canUseDirectFallback()) {
+                tokenCostService.recordDegradation(
+                        "MODEL_FAILURE",
+                        "retry_via_direct_api",
+                        ex.getMessage(),
+                        novelId,
+                        currentProvider(),
+                        currentChatModelName(),
+                        "chat.generate"
+                );
+                try {
+                    return chatDirectInternal(novelId, systemPrompt, userPrompt, 0.7, reservedCompletionTokens, "chat.direct_fallback");
+                } catch (RuntimeException fallbackEx) {
+                    fallbackEx.addSuppressed(ex);
+                    tokenCostService.recordDegradation(
+                            "MODEL_FAILURE",
+                            "direct_api_fallback_failed",
+                            fallbackEx.getMessage(),
+                            novelId,
+                            "deepseek",
+                            aiProperties.getModel().getDeepseek().getModelName(),
+                            "chat.direct_fallback"
+                    );
+                    throw fallbackEx;
+                }
+            }
             throw ex;
         }
     }
 
     public String chatDirect(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
+        return chatDirectInternal(null, systemPrompt, userPrompt, temperature, maxTokens, "chat.direct");
+    }
+
+    private String chatDirectInternal(Long novelId,
+                                      String systemPrompt,
+                                      String userPrompt,
+                                      double temperature,
+                                      int maxTokens,
+                                      String source) {
         String apiKey = aiProperties.getModel().getDeepseek().getApiKey();
         String baseUrl = aiProperties.getModel().getDeepseek().getBaseUrl();
         String modelName = aiProperties.getModel().getDeepseek().getModelName();
         TokenCostService.UsageReservation reservation = tokenCostService.reserveChatRequest(
+                novelId,
                 "deepseek",
-                aiProperties.getModel().getDeepseek().getModelName(),
-                "chat.direct",
+                modelName,
+                source,
                 buildPrompt(systemPrompt, userPrompt),
                 maxTokens
         );
 
-        Map<String, Object> requestBody = new java.util.HashMap<>();
+        Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("model", modelName);
         requestBody.put("messages", List.of(
                 Map.of("role", "system", "content", systemPrompt),
@@ -87,7 +130,6 @@ public class DeepSeekService {
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
 
         try {
-            @SuppressWarnings("unchecked")
             ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     baseUrl + "/chat/completions",
                     HttpMethod.POST,
@@ -101,13 +143,13 @@ public class DeepSeekService {
             }
 
             @SuppressWarnings("unchecked")
-            var choices = (List<Map<String, Object>>) body.get("choices");
+            List<Map<String, Object>> choices = (List<Map<String, Object>>) body.get("choices");
             if (choices == null || choices.isEmpty()) {
                 throw new RuntimeException("DeepSeek API returned empty choices");
             }
 
             @SuppressWarnings("unchecked")
-            var message = (Map<String, Object>) choices.get(0).get("message");
+            Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
             if (message == null) {
                 throw new RuntimeException("DeepSeek API response missing message field");
             }
@@ -130,6 +172,17 @@ public class DeepSeekService {
             tokenCostService.recordFailure(reservation, ex.getMessage());
             throw ex;
         }
+    }
+
+    private boolean canUseDirectFallback() {
+        AiProperties.Deepseek deepseek = aiProperties.getModel().getDeepseek();
+        AiProperties.Fallback fallback = aiProperties.getModel().getFallback();
+        return fallback.isEnabled()
+                && fallback.getMaxRetries() > 0
+                && deepseek.getApiKey() != null
+                && !deepseek.getApiKey().isBlank()
+                && deepseek.getBaseUrl() != null
+                && !deepseek.getBaseUrl().isBlank();
     }
 
     private String buildPrompt(String systemPrompt, String userPrompt) {

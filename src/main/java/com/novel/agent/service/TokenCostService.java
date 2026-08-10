@@ -32,18 +32,29 @@ public class TokenCostService {
 
     private final AiProperties aiProperties;
     private final Deque<UsageRecord> records = new ArrayDeque<>();
+    private final Deque<DegradationEvent> degradationEvents = new ArrayDeque<>();
 
     public UsageReservation reserveChatRequest(String provider, String model, String source,
                                                String promptText, int reservedCompletionTokens) {
+        return reserveChatRequest(null, provider, model, source, promptText, reservedCompletionTokens);
+    }
+
+    public UsageReservation reserveChatRequest(Long novelId, String provider, String model, String source,
+                                               String promptText, int reservedCompletionTokens) {
         int inputTokens = estimateTokens(promptText);
         int outputTokens = Math.max(reservedCompletionTokens, 0);
-        return reserveUsage(UsageType.CHAT, provider, model, source, inputTokens, outputTokens, 0, promptText.length());
+        int charCount = promptText == null ? 0 : promptText.length();
+        return reserveUsage(novelId, UsageType.CHAT, provider, model, source, inputTokens, outputTokens, 0, charCount);
     }
 
     public UsageReservation reserveEmbeddingRequest(String provider, String model, String source, List<String> texts) {
+        return reserveEmbeddingRequest(null, provider, model, source, texts);
+    }
+
+    public UsageReservation reserveEmbeddingRequest(Long novelId, String provider, String model, String source, List<String> texts) {
         int embeddingTokens = estimateTokens(texts);
-        int charCount = texts.stream().filter(Objects::nonNull).mapToInt(String::length).sum();
-        return reserveUsage(UsageType.EMBEDDING, provider, model, source, 0, 0, embeddingTokens, charCount);
+        int charCount = texts == null ? 0 : texts.stream().filter(Objects::nonNull).mapToInt(String::length).sum();
+        return reserveUsage(novelId, UsageType.EMBEDDING, provider, model, source, 0, 0, embeddingTokens, charCount);
     }
 
     public void recordChatSuccess(UsageReservation reservation, String completionText,
@@ -69,6 +80,34 @@ public class TokenCostService {
         ));
     }
 
+    public synchronized void recordDegradation(String trigger,
+                                               String strategy,
+                                               String detail,
+                                               Long novelId,
+                                               String provider,
+                                               String model,
+                                               String source) {
+        DegradationEvent event = DegradationEvent.builder()
+                .timestamp(System.currentTimeMillis())
+                .trigger(trigger)
+                .strategy(strategy)
+                .detail(trimMessage(detail))
+                .novelId(novelId)
+                .provider(provider)
+                .model(model)
+                .source(source)
+                .build();
+        degradationEvents.addFirst(event);
+        trimDegradationEvents();
+    }
+
+    public synchronized List<DegradationEvent> getRecentDegradations(int limit) {
+        return degradationEvents.stream()
+                .sorted(Comparator.comparingLong(DegradationEvent::getTimestamp).reversed())
+                .limit(Math.max(1, limit))
+                .collect(Collectors.toList());
+    }
+
     public synchronized DashboardSummary getDashboardSummary() {
         List<UsageRecord> snapshot = new ArrayList<>(records);
         UsageWindow today = aggregate(filterByToday(snapshot));
@@ -80,6 +119,9 @@ public class TokenCostService {
                 .month(month)
                 .total(total)
                 .dailyTrend(buildDailyTrend(snapshot, 7))
+                .byModel(buildScopedSummaries(snapshot, ScopeDimension.MODEL))
+                .byNovel(buildScopedSummaries(snapshot, ScopeDimension.NOVEL))
+                .recentDegradations(getRecentDegradations(10))
                 .build();
     }
 
@@ -105,6 +147,13 @@ public class TokenCostService {
         if (request.getMonthlyTokenBudget() != null) settings.setMonthlyTokenBudget(Math.max(0, request.getMonthlyTokenBudget()));
         if (request.getDailyBudgetUsd() != null) settings.setDailyBudgetUsd(Math.max(0, request.getDailyBudgetUsd()));
         if (request.getMonthlyBudgetUsd() != null) settings.setMonthlyBudgetUsd(Math.max(0, request.getMonthlyBudgetUsd()));
+        if (request.getPerNovelDailyTokenBudget() != null) settings.setPerNovelDailyTokenBudget(Math.max(0, request.getPerNovelDailyTokenBudget()));
+        if (request.getPerNovelDailyBudgetUsd() != null) settings.setPerNovelDailyBudgetUsd(Math.max(0, request.getPerNovelDailyBudgetUsd()));
+        if (request.getPerModelDailyTokenBudget() != null) settings.setPerModelDailyTokenBudget(Math.max(0, request.getPerModelDailyTokenBudget()));
+        if (request.getPerModelDailyBudgetUsd() != null) settings.setPerModelDailyBudgetUsd(Math.max(0, request.getPerModelDailyBudgetUsd()));
+        if (request.getDegradeOnBudgetExceeded() != null) settings.setDegradeOnBudgetExceeded(request.getDegradeOnBudgetExceeded());
+        if (request.getDegradeOnModelFailure() != null) settings.setDegradeOnModelFailure(request.getDegradeOnModelFailure());
+        if (request.getDegradeOnEmbeddingFailure() != null) settings.setDegradeOnEmbeddingFailure(request.getDegradeOnEmbeddingFailure());
         if (request.getPricing() != null) {
             AiProperties.Pricing pricing = settings.getPricing();
             if (request.getPricing().getCurrency() != null) pricing.setCurrency(request.getPricing().getCurrency());
@@ -113,11 +162,13 @@ public class TokenCostService {
             if (request.getPricing().getEmbeddingPerMillionTokens() != null) pricing.setEmbeddingPerMillionTokens(Math.max(0, request.getPricing().getEmbeddingPerMillionTokens()));
         }
         trimToRecentRecordLimit();
+        trimDegradationEvents();
         return toSettingsSnapshot();
     }
 
     public synchronized void clearRecords() {
         records.clear();
+        degradationEvents.clear();
     }
 
     public int estimateTokens(String text) {
@@ -134,7 +185,10 @@ public class TokenCostService {
                 continue;
             }
             Character.UnicodeScript script = Character.UnicodeScript.of(ch);
-            if (script == Character.UnicodeScript.HAN || script == Character.UnicodeScript.HIRAGANA || script == Character.UnicodeScript.KATAKANA || script == Character.UnicodeScript.HANGUL) {
+            if (script == Character.UnicodeScript.HAN
+                    || script == Character.UnicodeScript.HIRAGANA
+                    || script == Character.UnicodeScript.KATAKANA
+                    || script == Character.UnicodeScript.HANGUL) {
                 cjkChars++;
             } else if (Character.isLetterOrDigit(ch)) {
                 latinChars++;
@@ -147,15 +201,25 @@ public class TokenCostService {
     }
 
     public int estimateTokens(List<String> texts) {
+        if (texts == null || texts.isEmpty()) {
+            return 0;
+        }
         return texts.stream().filter(Objects::nonNull).mapToInt(this::estimateTokens).sum();
     }
 
-    private synchronized UsageReservation reserveUsage(UsageType usageType, String provider, String model, String source,
-                                                       int estimatedInputTokens, int estimatedOutputTokens,
-                                                       int estimatedEmbeddingTokens, int charCount) {
+    private synchronized UsageReservation reserveUsage(Long novelId,
+                                                       UsageType usageType,
+                                                       String provider,
+                                                       String model,
+                                                       String source,
+                                                       int estimatedInputTokens,
+                                                       int estimatedOutputTokens,
+                                                       int estimatedEmbeddingTokens,
+                                                       int charCount) {
         UsageReservation reservation = UsageReservation.builder()
                 .requestId(UUID.randomUUID().toString())
                 .timestamp(System.currentTimeMillis())
+                .novelId(novelId)
                 .usageType(usageType)
                 .provider(provider)
                 .model(model)
@@ -176,7 +240,7 @@ public class TokenCostService {
         reservation.setEstimatedCostUsd(estimatedCostUsd);
 
         if (settings.isStrictMode()) {
-            String reason = checkLimitReason(estimatedTotalTokens, estimatedCostUsd, settings);
+            String reason = checkLimitReason(novelId, provider, model, estimatedTotalTokens, estimatedCostUsd, settings);
             if (reason != null) {
                 appendRecord(buildRecord(reservation, UsageStatus.BLOCKED, estimatedInputTokens, estimatedOutputTokens, estimatedEmbeddingTokens, reason));
                 throw new CostLimitExceededException(reason);
@@ -185,35 +249,64 @@ public class TokenCostService {
         return reservation;
     }
 
-    private String checkLimitReason(int estimatedTotalTokens, double estimatedCostUsd, AiProperties.CostControl settings) {
+    private String checkLimitReason(Long novelId,
+                                    String provider,
+                                    String model,
+                                    int estimatedTotalTokens,
+                                    double estimatedCostUsd,
+                                    AiProperties.CostControl settings) {
         if (settings.getMaxEstimatedTokensPerRequest() > 0 && estimatedTotalTokens > settings.getMaxEstimatedTokensPerRequest()) {
-            return "?????? Token ??: " + estimatedTotalTokens + " > " + settings.getMaxEstimatedTokensPerRequest();
+            return "estimated token limit exceeded: " + estimatedTotalTokens + " > " + settings.getMaxEstimatedTokensPerRequest();
         }
 
-        UsageWindow today = aggregate(filterByToday(new ArrayList<>(records)));
-        UsageWindow month = aggregate(filterByMonth(new ArrayList<>(records)));
+        List<UsageRecord> snapshot = new ArrayList<>(records);
+        UsageWindow today = aggregate(filterByToday(snapshot));
+        UsageWindow month = aggregate(filterByMonth(snapshot));
+
         if (settings.getDailyTokenBudget() > 0 && today.getBillableTokens() + estimatedTotalTokens > settings.getDailyTokenBudget()) {
-            return "?? Token ???????";
+            return "daily token budget exceeded";
         }
         if (settings.getMonthlyTokenBudget() > 0 && month.getBillableTokens() + estimatedTotalTokens > settings.getMonthlyTokenBudget()) {
-            return "?? Token ???????";
+            return "monthly token budget exceeded";
         }
         if (settings.getDailyBudgetUsd() > 0 && today.getEstimatedCostUsd() + estimatedCostUsd > settings.getDailyBudgetUsd()) {
-            return "???????????";
+            return "daily cost budget exceeded";
         }
         if (settings.getMonthlyBudgetUsd() > 0 && month.getEstimatedCostUsd() + estimatedCostUsd > settings.getMonthlyBudgetUsd()) {
-            return "???????????";
+            return "monthly cost budget exceeded";
+        }
+
+        if (novelId != null) {
+            UsageWindow novelToday = aggregate(filterByNovelAndToday(snapshot, novelId));
+            if (settings.getPerNovelDailyTokenBudget() > 0 && novelToday.getBillableTokens() + estimatedTotalTokens > settings.getPerNovelDailyTokenBudget()) {
+                return "per-novel daily token budget exceeded: novelId=" + novelId;
+            }
+            if (settings.getPerNovelDailyBudgetUsd() > 0 && novelToday.getEstimatedCostUsd() + estimatedCostUsd > settings.getPerNovelDailyBudgetUsd()) {
+                return "per-novel daily cost budget exceeded: novelId=" + novelId;
+            }
+        }
+
+        UsageWindow modelToday = aggregate(filterByModelAndToday(snapshot, provider, model));
+        if (settings.getPerModelDailyTokenBudget() > 0 && modelToday.getBillableTokens() + estimatedTotalTokens > settings.getPerModelDailyTokenBudget()) {
+            return "per-model daily token budget exceeded: " + buildModelKey(provider, model);
+        }
+        if (settings.getPerModelDailyBudgetUsd() > 0 && modelToday.getEstimatedCostUsd() + estimatedCostUsd > settings.getPerModelDailyBudgetUsd()) {
+            return "per-model daily cost budget exceeded: " + buildModelKey(provider, model);
         }
         return null;
     }
 
-    private UsageRecord buildRecord(UsageReservation reservation, UsageStatus status,
-                                    int inputTokens, int outputTokens, int embeddingTokens,
+    private UsageRecord buildRecord(UsageReservation reservation,
+                                    UsageStatus status,
+                                    int inputTokens,
+                                    int outputTokens,
+                                    int embeddingTokens,
                                     String note) {
         int totalTokens = inputTokens + outputTokens + embeddingTokens;
         return UsageRecord.builder()
                 .requestId(reservation.getRequestId())
                 .timestamp(System.currentTimeMillis())
+                .novelId(reservation.getNovelId())
                 .usageType(reservation.getUsageType().name())
                 .status(status.name())
                 .provider(reservation.getProvider())
@@ -241,11 +334,11 @@ public class TokenCostService {
         }
     }
 
-    private double calculateCostUsd(int inputTokens, int outputTokens, int embeddingTokens) {
-        AiProperties.Pricing pricing = aiProperties.getCostControl().getPricing();
-        return inputTokens / 1_000_000D * pricing.getInputPerMillionTokens()
-                + outputTokens / 1_000_000D * pricing.getOutputPerMillionTokens()
-                + embeddingTokens / 1_000_000D * pricing.getEmbeddingPerMillionTokens();
+    private void trimDegradationEvents() {
+        int limit = Math.max(20, aiProperties.getCostControl().getRecentRecords());
+        while (degradationEvents.size() > limit) {
+            degradationEvents.removeLast();
+        }
     }
 
     private List<UsageRecord> filterByToday(List<UsageRecord> snapshot) {
@@ -262,9 +355,26 @@ public class TokenCostService {
                 .collect(Collectors.toList());
     }
 
-    private UsageWindow aggregate(List<UsageRecord> records) {
+    private List<UsageRecord> filterByNovelAndToday(List<UsageRecord> snapshot, Long novelId) {
+        LocalDate today = LocalDate.now(ZONE_ID);
+        return snapshot.stream()
+                .filter(record -> Objects.equals(record.getNovelId(), novelId))
+                .filter(record -> Instant.ofEpochMilli(record.getTimestamp()).atZone(ZONE_ID).toLocalDate().equals(today))
+                .collect(Collectors.toList());
+    }
+
+    private List<UsageRecord> filterByModelAndToday(List<UsageRecord> snapshot, String provider, String model) {
+        LocalDate today = LocalDate.now(ZONE_ID);
+        return snapshot.stream()
+                .filter(record -> Objects.equals(normalize(record.getProvider()), normalize(provider)))
+                .filter(record -> Objects.equals(normalize(record.getModel()), normalize(model)))
+                .filter(record -> Instant.ofEpochMilli(record.getTimestamp()).atZone(ZONE_ID).toLocalDate().equals(today))
+                .collect(Collectors.toList());
+    }
+
+    private UsageWindow aggregate(List<UsageRecord> scopedRecords) {
         UsageWindow window = new UsageWindow();
-        for (UsageRecord record : records) {
+        for (UsageRecord record : scopedRecords) {
             window.requestCount++;
             switch (record.getStatus()) {
                 case "SUCCESS" -> {
@@ -277,7 +387,8 @@ public class TokenCostService {
                 }
                 case "FAILED" -> window.failedCount++;
                 case "BLOCKED" -> window.blockedCount++;
-                default -> { }
+                default -> {
+                }
             }
         }
         return window;
@@ -313,6 +424,41 @@ public class TokenCostService {
                 .collect(Collectors.toList());
     }
 
+    private List<ScopedUsagePoint> buildScopedSummaries(List<UsageRecord> snapshot, ScopeDimension dimension) {
+        Map<String, List<UsageRecord>> grouped = new LinkedHashMap<>();
+        for (UsageRecord record : snapshot) {
+            String scopeKey = switch (dimension) {
+                case MODEL -> buildModelKey(record.getProvider(), record.getModel());
+                case NOVEL -> record.getNovelId() == null ? null : "novel-" + record.getNovelId();
+            };
+            if (scopeKey == null || scopeKey.isBlank()) {
+                continue;
+            }
+            grouped.computeIfAbsent(scopeKey, key -> new ArrayList<>()).add(record);
+        }
+
+        return grouped.entrySet().stream()
+                .map(entry -> {
+                    UsageWindow window = aggregate(entry.getValue());
+                    String label = dimension == ScopeDimension.MODEL
+                            ? entry.getKey()
+                            : entry.getKey().replace("novel-", "novelId=");
+                    return ScopedUsagePoint.builder()
+                            .scope(dimension.name())
+                            .key(entry.getKey())
+                            .label(label)
+                            .requestCount(window.getRequestCount())
+                            .successCount(window.getSuccessCount())
+                            .failedCount(window.getFailedCount())
+                            .blockedCount(window.getBlockedCount())
+                            .billableTokens(window.getBillableTokens())
+                            .estimatedCostUsd(window.getEstimatedCostUsd())
+                            .build();
+                })
+                .sorted(Comparator.comparingInt(ScopedUsagePoint::getBillableTokens).reversed())
+                .collect(Collectors.toList());
+    }
+
     private SettingsSnapshot toSettingsSnapshot() {
         AiProperties.CostControl settings = aiProperties.getCostControl();
         AiProperties.Pricing pricing = settings.getPricing();
@@ -326,11 +472,34 @@ public class TokenCostService {
                 .monthlyTokenBudget(settings.getMonthlyTokenBudget())
                 .dailyBudgetUsd(settings.getDailyBudgetUsd())
                 .monthlyBudgetUsd(settings.getMonthlyBudgetUsd())
+                .perNovelDailyTokenBudget(settings.getPerNovelDailyTokenBudget())
+                .perNovelDailyBudgetUsd(settings.getPerNovelDailyBudgetUsd())
+                .perModelDailyTokenBudget(settings.getPerModelDailyTokenBudget())
+                .perModelDailyBudgetUsd(settings.getPerModelDailyBudgetUsd())
+                .degradeOnBudgetExceeded(settings.isDegradeOnBudgetExceeded())
+                .degradeOnModelFailure(settings.isDegradeOnModelFailure())
+                .degradeOnEmbeddingFailure(settings.isDegradeOnEmbeddingFailure())
                 .currency(pricing.getCurrency())
                 .inputPerMillionTokens(pricing.getInputPerMillionTokens())
                 .outputPerMillionTokens(pricing.getOutputPerMillionTokens())
                 .embeddingPerMillionTokens(pricing.getEmbeddingPerMillionTokens())
                 .build();
+    }
+
+    private double calculateCostUsd(int inputTokens, int outputTokens, int embeddingTokens) {
+        AiProperties.Pricing pricing = aiProperties.getCostControl().getPricing();
+        double inputCost = inputTokens * pricing.getInputPerMillionTokens() / 1_000_000D;
+        double outputCost = outputTokens * pricing.getOutputPerMillionTokens() / 1_000_000D;
+        double embeddingCost = embeddingTokens * pricing.getEmbeddingPerMillionTokens() / 1_000_000D;
+        return round(inputCost + outputCost + embeddingCost);
+    }
+
+    private String buildModelKey(String provider, String model) {
+        return normalize(provider) + ":" + normalize(model);
+    }
+
+    private String normalize(String value) {
+        return value == null || value.isBlank() ? "unknown" : value.trim();
     }
 
     private double round(double value) {
@@ -352,11 +521,16 @@ public class TokenCostService {
         SUCCESS, FAILED, BLOCKED
     }
 
+    private enum ScopeDimension {
+        MODEL, NOVEL
+    }
+
     @Data
     @Builder
     public static class UsageReservation {
         private String requestId;
         private long timestamp;
+        private Long novelId;
         private UsageType usageType;
         private String provider;
         private String model;
@@ -373,6 +547,7 @@ public class TokenCostService {
     public static class UsageRecord {
         private String requestId;
         private long timestamp;
+        private Long novelId;
         private String usageType;
         private String status;
         private String provider;
@@ -389,12 +564,28 @@ public class TokenCostService {
 
     @Data
     @Builder
+    public static class DegradationEvent {
+        private long timestamp;
+        private String trigger;
+        private String strategy;
+        private String detail;
+        private Long novelId;
+        private String provider;
+        private String model;
+        private String source;
+    }
+
+    @Data
+    @Builder
     public static class DashboardSummary {
         private SettingsSnapshot settings;
         private UsageWindow today;
         private UsageWindow month;
         private UsageWindow total;
         private List<DailyUsagePoint> dailyTrend;
+        private List<ScopedUsagePoint> byModel;
+        private List<ScopedUsagePoint> byNovel;
+        private List<DegradationEvent> recentDegradations;
     }
 
     @Data
@@ -409,6 +600,13 @@ public class TokenCostService {
         private long monthlyTokenBudget;
         private double dailyBudgetUsd;
         private double monthlyBudgetUsd;
+        private long perNovelDailyTokenBudget;
+        private double perNovelDailyBudgetUsd;
+        private long perModelDailyTokenBudget;
+        private double perModelDailyBudgetUsd;
+        private boolean degradeOnBudgetExceeded;
+        private boolean degradeOnModelFailure;
+        private boolean degradeOnEmbeddingFailure;
         private String currency;
         private double inputPerMillionTokens;
         private double outputPerMillionTokens;
@@ -426,6 +624,13 @@ public class TokenCostService {
         private Long monthlyTokenBudget;
         private Double dailyBudgetUsd;
         private Double monthlyBudgetUsd;
+        private Long perNovelDailyTokenBudget;
+        private Double perNovelDailyBudgetUsd;
+        private Long perModelDailyTokenBudget;
+        private Double perModelDailyBudgetUsd;
+        private Boolean degradeOnBudgetExceeded;
+        private Boolean degradeOnModelFailure;
+        private Boolean degradeOnEmbeddingFailure;
         private PricingUpdateRequest pricing;
     }
 
@@ -446,6 +651,20 @@ public class TokenCostService {
         private int inputTokens;
         private int outputTokens;
         private int embeddingTokens;
+        private int billableTokens;
+        private double estimatedCostUsd;
+    }
+
+    @Data
+    @Builder
+    public static class ScopedUsagePoint {
+        private String scope;
+        private String key;
+        private String label;
+        private int requestCount;
+        private int successCount;
+        private int failedCount;
+        private int blockedCount;
         private int billableTokens;
         private double estimatedCostUsd;
     }

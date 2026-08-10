@@ -353,6 +353,7 @@ public class MilvusSearchService {
             item.put("matchReasons", List.copyOf(reasons));
             item.put("rankExplanation", String.join(" | ", reasons));
             item.put("recallTrace", recallTrace);
+            item.put("explanation", buildExplanation(recallTrace, String.join(" | ", reasons)));
             item.remove("_hitQueries");
         }
 
@@ -462,6 +463,7 @@ public class MilvusSearchService {
             Map<String, Object> scoreBreakdown = ensureMap(recallTrace, "scoreBreakdown");
             scoreBreakdown.put("eventBoost", round(eventBoost));
             scoreBreakdown.put("finalScore", round(rankScore));
+            copy.put("explanation", buildExplanation(recallTrace, String.join(" | ", reasons)));
             prioritized.add(copy);
         }
 
@@ -488,11 +490,11 @@ public class MilvusSearchService {
     }
 
     private boolean containsHookCue(String text) {
-        return text.contains("伏笔")
-                || text.contains("未解")
-                || text.contains("悬念")
-                || text.contains("线索")
-                || text.contains("谜团");
+        return text.contains("hook")
+                || text.contains("unresolved")
+                || text.contains("suspense")
+                || text.contains("clue")
+                || text.contains("foreshadow");
     }
 
     private List<String> asStringList(Object value) {
@@ -568,7 +570,7 @@ public class MilvusSearchService {
         }
 
         String[] tokens = queryText.toLowerCase(Locale.ROOT)
-                .split("[\\s,。！？；;、()（）\\-]+");
+                .split("[\\s\\p{Punct}，。！？；：（）【】、-]+");
 
         LinkedHashSet<String> keywords = new LinkedHashSet<>();
         for (String token : tokens) {
@@ -755,6 +757,46 @@ public class MilvusSearchService {
         Map<String, Object> created = new LinkedHashMap<>();
         parent.put(key, created);
         return created;
+    }
+
+    private Map<String, Object> buildExplanation(Map<String, Object> recallTrace, String rankExplanation) {
+        Map<String, Object> explanation = new LinkedHashMap<>();
+        explanation.put("summary", rankExplanation);
+        explanation.put("rankingSignals", List.copyOf(asStringList(recallTrace.get("rankingSignals"))));
+        explanation.put("matchedQueryVariants", List.copyOf(asStringList(recallTrace.get("matchedQueryVariants"))));
+        explanation.put("keywordHits", asInt(recallTrace.get("keywordHits")));
+
+        Object chapterDistance = recallTrace.get("chapterDistance");
+        if (chapterDistance != null) {
+            explanation.put("chapterDistance", asInt(chapterDistance));
+        }
+
+        Object primaryFieldSignals = recallTrace.get("primaryFieldSignals");
+        if (primaryFieldSignals instanceof Map<?, ?> map) {
+            explanation.put("primaryFieldSignals", new LinkedHashMap<>(castMap(map)));
+        }
+
+        List<String> eventSignals = asStringList(recallTrace.get("eventSignals"));
+        if (!eventSignals.isEmpty()) {
+            explanation.put("eventSignals", List.copyOf(eventSignals));
+        }
+
+        Map<String, Object> scoreBreakdown = new LinkedHashMap<>();
+        Object rawScoreBreakdown = recallTrace.get("scoreBreakdown");
+        if (rawScoreBreakdown instanceof Map<?, ?> map) {
+            scoreBreakdown.putAll(castMap(map));
+        }
+        explanation.put("scoreBreakdown", scoreBreakdown);
+        explanation.put("usedChapterBoost", asDouble(scoreBreakdown.get("chapterBoost")) > 0D);
+        explanation.put("usedRecencyBoost", asDouble(scoreBreakdown.get("recencyBoost")) > 0D);
+        explanation.put("usedEventBoost", asDouble(scoreBreakdown.get("eventBoost")) > 0D);
+        return explanation;
+    }
+
+    private Map<String, Object> castMap(Map<?, ?> raw) {
+        Map<String, Object> converted = new LinkedHashMap<>();
+        raw.forEach((key, value) -> converted.put(String.valueOf(key), value));
+        return converted;
     }
     private int countKeywordHits(String content, List<String> keywords) {
         int hits = 0;

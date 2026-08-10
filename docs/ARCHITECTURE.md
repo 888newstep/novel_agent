@@ -1,8 +1,44 @@
-﻿# Architecture
+# Architecture
 
 ## Goal
 
 This repository is a vertical AI application for long-form web novel writing. It stays at the product layer instead of becoming a generic agent platform.
+
+## Vertical Flow
+
+```text
+Source Files / Structured Data
+            |
+            v
+    Import And Segmentation
+            |
+            v
+   Entity Persistence + Milvus
+            |
+            v
+  Chapter-Aware Retrieval Layer
+            |
+            v
+    Writing Memory Assembly
+            |
+            v
+   Prompt Construction / Budget Check
+            |
+            v
+        Generation Output
+            |
+            v
+ Consistency Check / Quality Review
+            |
+            v
+   Evaluation Report + Cost Report
+```
+
+## Boundary With `newagent`
+
+- `newagent` owns generic platform capabilities such as Adaptive RAG, ReAct, multi-agent orchestration, and broader observability abstractions.
+- `novel_agent` owns vertical writing workflow depth such as story entity modeling, chapter-aware retrieval, writing memory assembly, consistency control, and scenario-specific evaluation.
+- The two repositories should complement each other instead of repeating the same technical talking points.
 
 ## Directory Responsibilities
 

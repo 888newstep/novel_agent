@@ -44,6 +44,8 @@ public class RagEvaluationService {
     private final Deque<EvaluationSnapshot> reportHistory = new ArrayDeque<>();
 
     private static final int MAX_HISTORY_SIZE = 5;
+    private static final String DEFAULT_PROFILE_NAME = "writing-default-v1";
+    private static final String DEFAULT_DATASET_VERSION = "2026-08-09";
 
     @PostConstruct
     public void init() {
@@ -80,6 +82,7 @@ public class RagEvaluationService {
         int totalRetrieved = 0;
         double mrrSum = 0.0;
         int queriesWithRelevantResult = 0;
+        long totalRetrievedContextChars = 0L;
         List<QueryResult> detailResults = new ArrayList<>();
 
         for (TestCase tc : testCases) {
@@ -111,6 +114,9 @@ public class RagEvaluationService {
             }
 
             long relevantCount = resultItems.stream().filter(ResultItem::isRelevant).count();
+            totalRetrievedContextChars += resultItems.stream()
+                    .mapToLong(item -> item.getContent() == null ? 0L : item.getContent().length())
+                    .sum();
             if (relevantCount > 0) {
                 queriesWithRelevantResult++;
                 mrrSum += 1.0 / firstRelevantRank;
@@ -130,6 +136,7 @@ public class RagEvaluationService {
         double precisionAtK = safeRatio(totalRelevant, totalRetrieved);
         double mrr = mrrSum / Math.max(queryCount, 1);
         double avgLatency = latencies.stream().mapToDouble(d -> d).average().orElse(0);
+        double p95Latency = computeP95(latencies);
         double p99Latency = computeP99(latencies);
         double minLatency = latencies.stream().mapToDouble(d -> d).min().orElse(0);
         double maxLatency = latencies.stream().mapToDouble(d -> d).max().orElse(0);
@@ -152,20 +159,30 @@ public class RagEvaluationService {
                 precisionAtK,
                 mrr,
                 avgLatency,
+                p95Latency,
                 p99Latency,
                 keywordCoverage,
                 queriesWithRelevantResult
         );
+        currentSnapshot.setProfileName(DEFAULT_PROFILE_NAME);
+        currentSnapshot.setDatasetVersion(DEFAULT_DATASET_VERSION);
         EvaluationComparison comparison = buildComparison(previousSnapshot, currentSnapshot);
 
         lastReport = new EvaluationReport(
                 currentSnapshot.getTimestamp(),
                 queryCount, topK, recallAtK, precisionAtK, mrr,
-                avgLatency, p99Latency, minLatency, maxLatency,
+                avgLatency, p95Latency, p99Latency, minLatency, maxLatency,
                 keywordCoverage, queriesWithRelevantResult, detailResults
         );
+        lastReport.setProfileName(DEFAULT_PROFILE_NAME);
+        lastReport.setDatasetVersion(DEFAULT_DATASET_VERSION);
         lastReport.setCategorySummaries(categorySummaries);
         lastReport.setComparison(comparison);
+        double avgRetrievedContextChars = queryCount <= 0
+                ? 0D
+                : (double) totalRetrievedContextChars / queryCount;
+        lastReport.setAvgRetrievedContextChars(avgRetrievedContextChars);
+        lastReport.setAvgRetrievedContextTokens(Math.ceil(avgRetrievedContextChars / 4.0));
 
         addHistorySnapshot(currentSnapshot);
         lastReport.setHistory(new ArrayList<>(reportHistory));
@@ -200,6 +217,14 @@ public class RagEvaluationService {
      */
     public List<TestCase> getTestCases() {
         return testCases;
+    }
+
+    private double computeP95(List<Double> values) {
+        if (values.isEmpty()) return 0;
+        List<Double> sorted = new ArrayList<>(values);
+        Collections.sort(sorted);
+        int idx = (int) Math.ceil(0.95 * sorted.size()) - 1;
+        return sorted.get(Math.max(idx, 0));
     }
 
     private double computeP99(List<Double> values) {
@@ -248,6 +273,7 @@ public class RagEvaluationService {
                 .mapToDouble(result -> result.getFirstRelevantRank() > 0 ? 1D / result.getFirstRelevantRank() : 0D)
                 .sum();
         double avgLatency = results.stream().mapToLong(QueryResult::getLatencyMs).average().orElse(0D);
+        double p95Latency = computeP95(results.stream().map(result -> (double) result.getLatencyMs()).collect(Collectors.toList()));
         double p99Latency = computeP99(results.stream().map(result -> (double) result.getLatencyMs()).collect(Collectors.toList()));
         long totalKeywords = results.stream().mapToLong(result -> result.getExpectedKeywords().size()).sum();
         long matchedKeywords = results.stream().mapToLong(result -> result.getMatchedKeywords().size()).sum();
@@ -260,6 +286,7 @@ public class RagEvaluationService {
                 safeRatio(totalRelevant, totalRetrieved),
                 reciprocalRankSum / Math.max(queryCount, 1),
                 avgLatency,
+                p95Latency,
                 p99Latency,
                 safeRatio(matchedKeywords, totalKeywords)
         );
@@ -280,6 +307,7 @@ public class RagEvaluationService {
                 round(current.getPrecisionAtK() - previous.getPrecisionAtK()),
                 round(current.getMrr() - previous.getMrr()),
                 round(current.getAvgLatencyMs() - previous.getAvgLatencyMs()),
+                round(current.getP95LatencyMs() - previous.getP95LatencyMs()),
                 round(current.getP99LatencyMs() - previous.getP99LatencyMs()),
                 round(current.getKeywordCoverage() - previous.getKeywordCoverage())
         );
@@ -326,25 +354,30 @@ public class RagEvaluationService {
         private long timestamp;
         private int queryCount;
         private int topK;
-        private double recallAtK;       // Recall@K (%)
-        private double precisionAtK;    // Precision@K (%)
-        private double mrr;             // Mean Reciprocal Rank
+        private double recallAtK;
+        private double precisionAtK;
+        private double mrr;
         private double avgLatencyMs;
+        private double p95LatencyMs;
         private double p99LatencyMs;
         private double minLatencyMs;
         private double maxLatencyMs;
-        private double keywordCoverage; // ?????? (%)
+        private double keywordCoverage;
         private int queriesWithRelevantResult;
+        private double avgRetrievedContextChars;
+        private double avgRetrievedContextTokens;
         private List<QueryResult> details;
         private List<CategorySummary> categorySummaries;
         private EvaluationComparison comparison;
         private List<EvaluationSnapshot> history;
+        private String profileName;
+        private String datasetVersion;
 
         public EvaluationReport() {}
 
         public EvaluationReport(long timestamp, int queryCount, int topK,
                                 double recallAtK, double precisionAtK, double mrr,
-                                double avgLatencyMs, double p99LatencyMs,
+                                double avgLatencyMs, double p95LatencyMs, double p99LatencyMs,
                                 double minLatencyMs, double maxLatencyMs,
                                 double keywordCoverage, int queriesWithRelevantResult,
                                 List<QueryResult> details) {
@@ -355,6 +388,7 @@ public class RagEvaluationService {
             this.precisionAtK = precisionAtK;
             this.mrr = mrr;
             this.avgLatencyMs = avgLatencyMs;
+            this.p95LatencyMs = p95LatencyMs;
             this.p99LatencyMs = p99LatencyMs;
             this.minLatencyMs = minLatencyMs;
             this.maxLatencyMs = maxLatencyMs;
@@ -372,6 +406,7 @@ public class RagEvaluationService {
             r.precisionAtK = 0;
             r.mrr = 0;
             r.avgLatencyMs = 0;
+            r.p95LatencyMs = 0;
             r.p99LatencyMs = 0;
             r.minLatencyMs = 0;
             r.maxLatencyMs = 0;
@@ -381,6 +416,8 @@ public class RagEvaluationService {
             r.categorySummaries = Collections.emptyList();
             r.comparison = null;
             r.history = Collections.emptyList();
+            r.profileName = DEFAULT_PROFILE_NAME;
+            r.datasetVersion = DEFAULT_DATASET_VERSION;
             return r;
         }
 
@@ -391,15 +428,20 @@ public class RagEvaluationService {
         public double getPrecisionAtK() { return precisionAtK; }
         public double getMrr() { return mrr; }
         public double getAvgLatencyMs() { return avgLatencyMs; }
+        public double getP95LatencyMs() { return p95LatencyMs; }
         public double getP99LatencyMs() { return p99LatencyMs; }
         public double getMinLatencyMs() { return minLatencyMs; }
         public double getMaxLatencyMs() { return maxLatencyMs; }
         public double getKeywordCoverage() { return keywordCoverage; }
         public int getQueriesWithRelevantResult() { return queriesWithRelevantResult; }
+        public double getAvgRetrievedContextChars() { return avgRetrievedContextChars; }
+        public double getAvgRetrievedContextTokens() { return avgRetrievedContextTokens; }
         public List<QueryResult> getDetails() { return details; }
         public List<CategorySummary> getCategorySummaries() { return categorySummaries; }
         public EvaluationComparison getComparison() { return comparison; }
         public List<EvaluationSnapshot> getHistory() { return history; }
+        public String getProfileName() { return profileName; }
+        public String getDatasetVersion() { return datasetVersion; }
 
         public void setCategorySummaries(List<CategorySummary> categorySummaries) {
             this.categorySummaries = categorySummaries;
@@ -412,6 +454,22 @@ public class RagEvaluationService {
         public void setHistory(List<EvaluationSnapshot> history) {
             this.history = history;
         }
+
+        public void setProfileName(String profileName) {
+            this.profileName = profileName;
+        }
+
+        public void setDatasetVersion(String datasetVersion) {
+            this.datasetVersion = datasetVersion;
+        }
+
+        public void setAvgRetrievedContextChars(double avgRetrievedContextChars) {
+            this.avgRetrievedContextChars = avgRetrievedContextChars;
+        }
+
+        public void setAvgRetrievedContextTokens(double avgRetrievedContextTokens) {
+            this.avgRetrievedContextTokens = avgRetrievedContextTokens;
+        }
     }
 
     public static class CategorySummary {
@@ -422,6 +480,7 @@ public class RagEvaluationService {
         private double precisionAtK;
         private double mrr;
         private double avgLatencyMs;
+        private double p95LatencyMs;
         private double p99LatencyMs;
         private double keywordCoverage;
 
@@ -429,7 +488,7 @@ public class RagEvaluationService {
 
         public CategorySummary(String category, int queryCount, int queriesWithRelevantResult,
                                double recallAtK, double precisionAtK, double mrr,
-                               double avgLatencyMs, double p99LatencyMs, double keywordCoverage) {
+                               double avgLatencyMs, double p95LatencyMs, double p99LatencyMs, double keywordCoverage) {
             this.category = category;
             this.queryCount = queryCount;
             this.queriesWithRelevantResult = queriesWithRelevantResult;
@@ -437,6 +496,7 @@ public class RagEvaluationService {
             this.precisionAtK = precisionAtK;
             this.mrr = mrr;
             this.avgLatencyMs = avgLatencyMs;
+            this.p95LatencyMs = p95LatencyMs;
             this.p99LatencyMs = p99LatencyMs;
             this.keywordCoverage = keywordCoverage;
         }
@@ -448,6 +508,7 @@ public class RagEvaluationService {
         public double getPrecisionAtK() { return precisionAtK; }
         public double getMrr() { return mrr; }
         public double getAvgLatencyMs() { return avgLatencyMs; }
+        public double getP95LatencyMs() { return p95LatencyMs; }
         public double getP99LatencyMs() { return p99LatencyMs; }
         public double getKeywordCoverage() { return keywordCoverage; }
     }
@@ -460,15 +521,18 @@ public class RagEvaluationService {
         private double precisionAtK;
         private double mrr;
         private double avgLatencyMs;
+        private double p95LatencyMs;
         private double p99LatencyMs;
         private double keywordCoverage;
         private int queriesWithRelevantResult;
+        private String profileName;
+        private String datasetVersion;
 
         public EvaluationSnapshot() {}
 
         public EvaluationSnapshot(long timestamp, int queryCount, int topK,
                                   double recallAtK, double precisionAtK, double mrr,
-                                  double avgLatencyMs, double p99LatencyMs,
+                                  double avgLatencyMs, double p95LatencyMs, double p99LatencyMs,
                                   double keywordCoverage, int queriesWithRelevantResult) {
             this.timestamp = timestamp;
             this.queryCount = queryCount;
@@ -477,6 +541,7 @@ public class RagEvaluationService {
             this.precisionAtK = precisionAtK;
             this.mrr = mrr;
             this.avgLatencyMs = avgLatencyMs;
+            this.p95LatencyMs = p95LatencyMs;
             this.p99LatencyMs = p99LatencyMs;
             this.keywordCoverage = keywordCoverage;
             this.queriesWithRelevantResult = queriesWithRelevantResult;
@@ -489,9 +554,14 @@ public class RagEvaluationService {
         public double getPrecisionAtK() { return precisionAtK; }
         public double getMrr() { return mrr; }
         public double getAvgLatencyMs() { return avgLatencyMs; }
+        public double getP95LatencyMs() { return p95LatencyMs; }
         public double getP99LatencyMs() { return p99LatencyMs; }
         public double getKeywordCoverage() { return keywordCoverage; }
         public int getQueriesWithRelevantResult() { return queriesWithRelevantResult; }
+        public String getProfileName() { return profileName; }
+        public String getDatasetVersion() { return datasetVersion; }
+        public void setProfileName(String profileName) { this.profileName = profileName; }
+        public void setDatasetVersion(String datasetVersion) { this.datasetVersion = datasetVersion; }
     }
 
     public static class EvaluationComparison {
@@ -504,6 +574,7 @@ public class RagEvaluationService {
         private double precisionAtKDelta;
         private double mrrDelta;
         private double avgLatencyMsDelta;
+        private double p95LatencyMsDelta;
         private double p99LatencyMsDelta;
         private double keywordCoverageDelta;
 
@@ -512,7 +583,7 @@ public class RagEvaluationService {
         public EvaluationComparison(long baselineTimestamp, int baselineTopK, int currentTopK,
                                     int queryCountDelta, int queriesWithRelevantResultDelta,
                                     double recallAtKDelta, double precisionAtKDelta, double mrrDelta,
-                                    double avgLatencyMsDelta, double p99LatencyMsDelta, double keywordCoverageDelta) {
+                                    double avgLatencyMsDelta, double p95LatencyMsDelta, double p99LatencyMsDelta, double keywordCoverageDelta) {
             this.baselineTimestamp = baselineTimestamp;
             this.baselineTopK = baselineTopK;
             this.currentTopK = currentTopK;
@@ -522,6 +593,7 @@ public class RagEvaluationService {
             this.precisionAtKDelta = precisionAtKDelta;
             this.mrrDelta = mrrDelta;
             this.avgLatencyMsDelta = avgLatencyMsDelta;
+            this.p95LatencyMsDelta = p95LatencyMsDelta;
             this.p99LatencyMsDelta = p99LatencyMsDelta;
             this.keywordCoverageDelta = keywordCoverageDelta;
         }
@@ -535,6 +607,7 @@ public class RagEvaluationService {
         public double getPrecisionAtKDelta() { return precisionAtKDelta; }
         public double getMrrDelta() { return mrrDelta; }
         public double getAvgLatencyMsDelta() { return avgLatencyMsDelta; }
+        public double getP95LatencyMsDelta() { return p95LatencyMsDelta; }
         public double getP99LatencyMsDelta() { return p99LatencyMsDelta; }
         public double getKeywordCoverageDelta() { return keywordCoverageDelta; }
     }

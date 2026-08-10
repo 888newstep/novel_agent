@@ -1,4 +1,4 @@
-﻿# Project Details
+# Project Details
 
 ## Positioning
 

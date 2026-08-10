@@ -1,32 +1,77 @@
-﻿[
+[
   {
-    "query": "dragon foreshadowing plot",
-    "expectedKeywords": ["dragon", "foreshadowing"],
-    "category": "plot"
+    "query": "main character profile and stable personality",
+    "expectedKeywords": ["main character", "personality", "profile"],
+    "category": "character_profile"
   },
   {
-    "query": "hidden clue reveal plot",
-    "expectedKeywords": ["clue", "reveal"],
-    "category": "plot"
+    "query": "mentor and rival relationship tension",
+    "expectedKeywords": ["mentor", "rival", "relationship"],
+    "category": "character_profile"
   },
   {
-    "query": "magic sword artifact",
-    "expectedKeywords": ["sword", "artifact"],
-    "category": "item"
+    "query": "cold strategist hidden softness under pressure",
+    "expectedKeywords": ["strategist", "softness", "pressure"],
+    "category": "character_profile"
   },
   {
-    "query": "spirit ring item trail",
-    "expectedKeywords": ["ring", "item"],
-    "category": "item"
+    "query": "unresolved dragon oath foreshadowing",
+    "expectedKeywords": ["dragon", "oath", "foreshadowing"],
+    "category": "unresolved_event"
   },
   {
-    "query": "mentor relationship tension",
-    "expectedKeywords": ["mentor", "relationship"],
-    "category": "character"
+    "query": "hidden clue from the previous chapter",
+    "expectedKeywords": ["hidden clue", "previous chapter"],
+    "category": "unresolved_event"
   },
   {
-    "query": "rival character conflict",
-    "expectedKeywords": ["rival", "conflict"],
-    "category": "character"
+    "query": "promise left at the ancestral tomb still unresolved",
+    "expectedKeywords": ["promise", "ancestral tomb", "unresolved"],
+    "category": "unresolved_event"
+  },
+  {
+    "query": "sect rules and mountain world setting",
+    "expectedKeywords": ["sect", "mountain", "world setting"],
+    "category": "world_setting"
+  },
+  {
+    "query": "city market and underground district setting",
+    "expectedKeywords": ["city", "market", "district"],
+    "category": "world_setting"
+  },
+  {
+    "query": "imperial capital academy hierarchy and law",
+    "expectedKeywords": ["capital", "academy", "law"],
+    "category": "world_setting"
+  },
+  {
+    "query": "spirit sword skill inheritance",
+    "expectedKeywords": ["spirit sword", "skill", "inheritance"],
+    "category": "item_skill"
+  },
+  {
+    "query": "storage ring artifact trail",
+    "expectedKeywords": ["storage ring", "artifact"],
+    "category": "item_skill"
+  },
+  {
+    "query": "bloodline seal manual side effects",
+    "expectedKeywords": ["bloodline seal", "manual", "side effects"],
+    "category": "item_skill"
+  },
+  {
+    "query": "continuation context before chapter ten battle",
+    "expectedKeywords": ["chapter ten", "battle", "context"],
+    "category": "prewriting_context"
+  },
+  {
+    "query": "memory assembly for reunion scene",
+    "expectedKeywords": ["memory", "reunion", "scene"],
+    "category": "prewriting_context"
+  },
+  {
+    "query": "context before confession after siege",
+    "expectedKeywords": ["context", "confession", "siege"],
+    "category": "prewriting_context"
   }
 ]
