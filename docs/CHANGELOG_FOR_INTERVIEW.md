@@ -136,7 +136,7 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 
 - topic: dependency security and supply-chain maintenance
 - problem: GitHub reported a high-severity dependency alert caused by old transitive components in the Milvus SDK graph
-- change: added explicit Maven security baselines, upgraded the MySQL connector, enabled Dependabot for Maven and GitHub Actions, and added pull-request dependency review
-- result: the resolved runtime tree no longer uses the identified old component versions, while the Milvus SDK API remains unchanged
-- tradeoff: dependency overrides must be regression-tested when the SDK or transport stack changes
+- change: upgraded `milvus-sdk-java` from `2.4.11` to `2.6.23`, pinned Jackson, Netty, OpenNLP, Jsoup, Apache Commons, and MySQL security baselines, enabled Dependabot for Maven and GitHub Actions, and added pull-request dependency review
+- result: the resolved runtime graph is materially smaller, the identified old component versions are no longer selected, and the full test suite remains green
+- tradeoff: the SDK and transport stack now have an explicit upgrade boundary that must be regression-tested together
 - evidence: `pom.xml`, `docs/DEPENDENCY_SECURITY.md`, `.github/dependabot.yml`, `.github/workflows/ci.yml`, and the full Maven test baseline
