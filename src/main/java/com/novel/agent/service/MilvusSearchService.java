@@ -8,6 +8,7 @@ import com.novel.agent.repository.KeyEventRepository;
 import com.novel.agent.config.RetrievalProperties;
 import com.novel.agent.repository.RelationRepository;
 import io.milvus.v2.client.MilvusClientV2;
+import io.milvus.v2.exception.MilvusClientException;
 import io.milvus.v2.service.vector.request.SearchReq;
 import io.milvus.v2.service.vector.request.data.FloatVec;
 import io.milvus.v2.service.vector.response.SearchResp;
@@ -522,7 +523,14 @@ public class MilvusSearchService {
                 .searchParams(searchParams())
                 .build();
 
-        SearchResp resp = milvusClient.search(searchReq);
+        SearchResp resp;
+        try {
+            resp = milvusClient.search(searchReq);
+        } catch (MilvusClientException e) {
+            log.warn("Milvus collection [{}] is not ready; return empty search result. filter=[{}], reason={}",
+                    collectionName, filter, e.getMessage());
+            return List.of();
+        }
         List<Map<String, Object>> results = new ArrayList<>();
         for (List<SearchResp.SearchResult> resultList : resp.getSearchResults()) {
             for (SearchResp.SearchResult result : resultList) {

@@ -39,9 +39,18 @@ Record the following in every round:
 |------|------|--------------|----------------|------|-----------|--------------|-----|-------------|-----|-----|--------------------|----------|-------|
 | R0-CONTRACT | 2026-08-10 | 15 | metric aggregation fixture | 3 | 100% | 100% | 1.000 | not representative | not representative | not representative | emitted | n/a | CI contract: `RagEvaluationServiceTest` |
 | R1-FIXTURE | 2026-08-10 | 1 | continuation ranking | 1 | 100% after ranking | n/a | n/a | not measured | not measured | not measured | n/a | n/a | Top-1 relevant result: `0/1 -> 1/1` |
+| R0-LIVE-20260810 | 2026-08-10 | 15 | cloud Milvus operational run | 5 | 0%* | 0%* | 0.000* | 256.1ms | 692ms | 692ms | 563 | n/a | 15/15 queries returned 5 candidates; semantic score is not comparable* |
 | R0-LIVE | pending | pending | Milvus-backed baseline | pending | pending | pending | pending | pending | pending | pending | pending | pending | run `scripts/run-rag-evaluation.ps1` |
 
 `R0-CONTRACT` and `R1-FIXTURE` are deterministic CI evidence, not production latency claims. A live row must be recorded only after the embedding provider, Milvus instance, host, dataset, and parameters are written down.
+
+### R0-LIVE-20260810 Evidence Note
+
+- environment: local MySQL, cloud Milvus, SiliconFlow `BAAI/bge-m3` embedding provider
+- parameters: dataset version `2026-08-09`, profile `writing-default-v1`, `novelId=0`, `TopK=5`
+- operational result: all 15 API-backed queries completed and returned 5 candidates; average latency was `256.1ms`, `P95=692ms`, `P99=692ms`, and average retrieved context was `563` estimated tokens
+- semantic caveat: the fixed evaluation cases use English keywords for a writing-memory fixture, while the live `novelId=0` corpus is an existing Chinese training-data collection. The `0%` recall/precision/MRR values are therefore marked `*` and must not be interpreted as an algorithm regression
+- reproducibility: run `scripts/run-rag-evaluation.ps1` against the same environment after loading a corpus aligned with `rag_eval_dataset.json`
 
 ## Reproducible Live Run
 

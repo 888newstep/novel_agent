@@ -6,6 +6,8 @@ import com.novel.agent.repository.ChapterRepository;
 import com.novel.agent.repository.KeyEventRepository;
 import com.novel.agent.repository.RelationRepository;
 import io.milvus.v2.client.MilvusClientV2;
+import io.milvus.v2.exception.ErrorCode;
+import io.milvus.v2.exception.MilvusClientException;
 import io.milvus.v2.service.vector.request.SearchReq;
 import io.milvus.v2.service.vector.response.SearchResp;
 import org.junit.jupiter.api.Test;
@@ -234,6 +236,30 @@ class MilvusSearchServiceTest {
         assertTrue(((Map<?, ?>) eventTrace.get("scoreBreakdown")).containsKey("eventBoost"));
         assertTrue((Boolean) eventExplanation.get("usedEventBoost"));
         assertTrue(((List<?>) eventExplanation.get("eventSignals")).contains("plot_hook_priority"));
+    }
+
+    @Test
+    void returnsEmptyResultsWhenCollectionIsNotReady() {
+        MilvusClientV2 milvusClient = mock(MilvusClientV2.class);
+        EmbeddingService embeddingService = mock(EmbeddingService.class);
+        ChapterRepository chapterRepository = mock(ChapterRepository.class);
+        KeyEventRepository keyEventRepository = mock(KeyEventRepository.class);
+        RelationRepository relationRepository = mock(RelationRepository.class);
+        MilvusSearchService service = new MilvusSearchService(
+                milvusClient,
+                embeddingService,
+                chapterRepository,
+                keyEventRepository,
+                relationRepository,
+                new RetrievalProperties()
+        );
+
+        when(embeddingService.batchGenerateEmbedding(any()))
+                .thenReturn(List.of(List.of(0.1f, 0.2f)));
+        when(milvusClient.search(any(SearchReq.class)))
+                .thenThrow(new MilvusClientException(ErrorCode.SERVER_ERROR, "collection not loaded"));
+
+        assertTrue(service.searchSegments(1L, "dragon oath", 1).isEmpty());
     }
 
     private static SearchResp.SearchResult searchResult(Long id, float score, Map<String, Object> entity) {

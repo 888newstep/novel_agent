@@ -108,6 +108,8 @@ milvus:
   import:
     max-retries: 3
     retry-backoff-ms: 1000
+  lifecycle:
+    auto-load: true
 
 logging:
   level:

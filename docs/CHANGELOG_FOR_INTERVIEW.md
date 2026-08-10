@@ -130,7 +130,16 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - change: added context-size metrics to the RAG report, added `scripts/run-rag-evaluation.ps1`, recorded a deterministic ranking case and post-generation regression case, and normalized core Markdown files to UTF-8 without BOM
 - result: GitHub readers can distinguish CI fixture evidence from live Milvus numbers, reproduce the API-backed evaluation command, and follow measurable retrieval and generation cases without oral context
 - tradeoff: fixture results remain explicitly non-production evidence; live latency and throughput still require a reachable environment
-- evidence: `docs/BENCHMARK_REPORT.md`, `docs/WRITING_QUALITY_CASES.md`, `docs/METRICS_BASELINE.md`, `scripts/run-rag-evaluation.ps1`, and the 22-test Maven baseline
+- evidence: `docs/BENCHMARK_REPORT.md`, `docs/WRITING_QUALITY_CASES.md`, `docs/METRICS_BASELINE.md`, `scripts/run-rag-evaluation.ps1`, and the 23-test Maven baseline
+
+### 2026-08-10 (live Milvus validation and collection lifecycle hardening)
+
+- topic: real-environment retrieval reliability
+- problem: the application could return `500` when a Milvus collection was not loaded, and batch loading stopped at the first collection without an index
+- change: added startup auto-load for finished indexes, isolated load failures per collection, added an empty-result degradation path for unavailable search collections, and made vector cleanup best effort across unready collections
+- result: the application starts with local MySQL, cloud Milvus, and SiliconFlow embedding enabled; the live event path returned the expected unresolved hook with ranking explanations, and cleanup completed without leaving test novels in MySQL
+- evidence: `src/main/java/com/novel/agent/config/MilvusLifecycleConfig.java`, `src/main/java/com/novel/agent/service/MilvusAdminService.java`, `src/main/java/com/novel/agent/service/MilvusSearchService.java`, and `src/test/java/com/novel/agent/service/MilvusSearchServiceTest.java`
+- live run: 15 RAG queries returned 5 candidates each with `Avg=256.1ms`, `P95=692ms`, and `P99=692ms`; semantic scores remain explicitly excluded because the cloud corpus is not aligned with the fixed evaluation labels
 
 ### 2026-08-10 (dependency security hardening)
 

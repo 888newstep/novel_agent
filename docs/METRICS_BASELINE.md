@@ -26,10 +26,11 @@ Use the following labels consistently:
 | Cost-governance scopes | Verified | per request, per novel, per model, daily, monthly | `src/main/java/com/novel/agent/service/TokenCostService.java` |
 | Cost degradation strategies | Verified | budget fallback, model fallback, embedding fallback | `src/main/java/com/novel/agent/controller/NovelController.java`, `src/main/java/com/novel/agent/service/DeepSeekService.java`, `src/main/java/com/novel/agent/service/EmbeddingService.java` |
 | Public import throughput number | Pending Benchmark | not pinned yet | this document |
-| Public retrieval latency number on real env | Ready To Measure | service already reports `Avg`, `P95`, `P99` | `docs/BENCHMARK_REPORT.md` |
+| Public retrieval latency number on real env | Verified | 2026-08-10 live run: `Avg=256.1ms`, `P95=692ms`, `P99=692ms` | `docs/BENCHMARK_REPORT.md` |
 | Public token-cost before/after comparison | Ready To Measure | accounting and degradation events available | `docs/COST_GOVERNANCE_CASE.md` |
 | CI retrieval contract result | Verified | 15 cases, `Recall@3=100%`, `Precision@3=100%`, `MRR=1.000` in deterministic fixture | `src/test/java/com/novel/agent/service/RagEvaluationServiceTest.java` |
 | Reproducible live evaluation command | Verified | API runner writes the complete report and prints the metric summary | `scripts/run-rag-evaluation.ps1` |
+| Milvus collection lifecycle | Verified | indexed collections auto-load after startup; unindexed collections are skipped and search degrades to an empty result | `src/main/java/com/novel/agent/config/MilvusLifecycleConfig.java`, `src/main/java/com/novel/agent/service/MilvusAdminService.java`, `src/main/java/com/novel/agent/service/MilvusSearchService.java` |
 
 ## Import Pipeline Metrics
 
@@ -94,6 +95,14 @@ The evaluation service and report model already support:
 - scenario count: 5
 - case count: 15
 - stable profile name: `writing-default-v1`
+
+### Live Operational Evidence
+
+- run date: `2026-08-10`
+- environment: local MySQL + cloud Milvus + SiliconFlow `BAAI/bge-m3`
+- `TopK=5`, 15 queries, average latency `256.1ms`, `P95/P99=692ms`
+- average retrieved context: `2250` characters / `563` estimated tokens
+- semantic metrics are intentionally not promoted to the public quality baseline because the live corpus and fixed keyword labels are not aligned; see `docs/BENCHMARK_REPORT.md`
 
 ### Evidence Files
 

@@ -7,6 +7,7 @@ import io.milvus.v2.service.collection.request.LoadCollectionReq;
 import io.milvus.v2.service.collection.request.ReleaseCollectionReq;
 import io.milvus.v2.service.index.request.CreateIndexReq;
 import io.milvus.v2.service.index.request.DescribeIndexReq;
+import io.milvus.v2.service.index.request.ListIndexesReq;
 import io.milvus.v2.service.utility.request.CompactReq;
 import io.milvus.v2.service.utility.request.FlushReq;
 import lombok.RequiredArgsConstructor;
@@ -194,15 +195,47 @@ public class MilvusAdminService {
      */
     public void loadAllCollections() {
         for (String name : COLLECTION_NAMES) {
-            loadCollection(name);
+            loadCollectionIfReady(name);
         }
-        loadCollection(KNOWLEDGE_COLLECTION);
+        loadCollectionIfReady(KNOWLEDGE_COLLECTION);
         log.info("所有集合已加载到内存");
     }
 
     /**
      * 释放集合，释放内存
      */
+    private void loadCollectionIfReady(String collectionName) {
+        try {
+            List<String> indexNames = milvusClient.listIndexes(ListIndexesReq.builder()
+                    .collectionName(collectionName)
+                    .fieldName("embedding")
+                    .build());
+            if (indexNames == null || indexNames.isEmpty()) {
+                log.info("Milvus collection [{}] has no embedding index; skip load", collectionName);
+                return;
+            }
+            var indexDesc = milvusClient.describeIndex(DescribeIndexReq.builder()
+                    .collectionName(collectionName)
+                    .fieldName("embedding")
+                    .indexName(indexNames.get(0))
+                    .build())
+                    .getIndexDescByFieldName("embedding");
+            if (indexDesc == null) {
+                log.info("Milvus collection [{}] has no embedding index; skip load", collectionName);
+                return;
+            }
+            if (indexDesc.getIndexState() != IndexBuildState.Finished) {
+                log.info("Milvus collection [{}] index state is {}; skip load",
+                        collectionName, indexDesc.getIndexState());
+                return;
+            }
+            loadCollection(collectionName);
+        } catch (Exception e) {
+            log.warn("Milvus collection [{}] load failed; continue with other collections: {}",
+                    collectionName, e.getMessage());
+        }
+    }
+
     public void releaseCollection(String collectionName) {
         milvusClient.releaseCollection(ReleaseCollectionReq.builder()
                 .collectionName(collectionName)
@@ -242,8 +275,16 @@ public class MilvusAdminService {
     /**
      * 按 novel_id 删除指定集合中所有向量
      */
+    private void deleteSafely(io.milvus.v2.service.vector.request.DeleteReq request) {
+        try {
+            milvusClient.delete(request);
+        } catch (Exception e) {
+            log.warn("Milvus delete skipped because collection is not ready: {}", e.getMessage());
+        }
+    }
+
     public void deleteByNovelId(String collectionName, Long novelId) {
-        milvusClient.delete(io.milvus.v2.service.vector.request.DeleteReq.builder()
+        deleteSafely(io.milvus.v2.service.vector.request.DeleteReq.builder()
                 .collectionName(collectionName)
                 .filter("novel_id == " + novelId)
                 .build());
