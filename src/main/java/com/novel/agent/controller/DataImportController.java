@@ -3,8 +3,10 @@ package com.novel.agent.controller;
 import com.novel.agent.service.DataImportService;
 import com.novel.agent.service.MilvusAdminService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -16,6 +18,7 @@ import java.util.concurrent.CompletableFuture;
 @RestController
 @RequestMapping("/api/import")
 @RequiredArgsConstructor
+@Slf4j
 public class DataImportController {
 
     private final DataImportService dataImportService;
@@ -49,6 +52,37 @@ public class DataImportController {
         return Map.of(
                 "success", true,
                 "message", "导入任务已异步启动，请调用 /api/import/progress 或 /api/import/status 查看进度",
+                "status", dataImportService.getImportStatus()
+        );
+    }
+
+    @PostMapping("/training-data/{novelId}")
+    public Map<String, Object> importTrainingDataForNovel(
+            @PathVariable long novelId,
+            @RequestParam String filePath) {
+        if (novelId < 0) {
+            return Map.of("success", false, "message", "novelId must be non-negative");
+        }
+        if (dataImportService.isRunning()) {
+            return Map.of(
+                    "success", false,
+                    "message", "import task is already running",
+                    "status", dataImportService.getImportStatus()
+            );
+        }
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                dataImportService.importFromJson(filePath, novelId);
+            } catch (Exception ex) {
+                log.error("isolated import failed, novelId={}, filePath={}", novelId, filePath, ex);
+            }
+        });
+
+        return Map.of(
+                "success", true,
+                "novelId", novelId,
+                "message", "isolated import task started",
                 "status", dataImportService.getImportStatus()
         );
     }

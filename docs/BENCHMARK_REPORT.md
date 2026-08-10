@@ -52,6 +52,33 @@ Record the following in every round:
 - semantic caveat: the fixed evaluation cases use English keywords for a writing-memory fixture, while the live `novelId=0` corpus is an existing Chinese training-data collection. The `0%` recall/precision/MRR values are therefore marked `*` and must not be interpreted as an algorithm regression
 - reproducibility: run `scripts/run-rag-evaluation.ps1` against the same environment after loading a corpus aligned with `rag_eval_dataset.json`
 
+## Import Throughput Baseline
+
+### IMPORT-LIVE-20260810
+
+| Field | Value |
+|------|-------|
+| Input format | JSON lines |
+| Source records | 60 |
+| Imported records | 60 |
+| Stored segments | 120 |
+| Service duration | `8.176s` |
+| Wall-clock duration | `10.264s` |
+| Records per second | `7.34` |
+| Segments per second | `14.68` |
+| Batch count | 7 |
+| Flush count | 1 |
+| Retry count | 0 |
+| Failure count | 0 |
+| Checkpoint after completion | removed |
+| Isolation | positive temporary `novelId`, cleaned from all Milvus collections |
+
+- environment: local MySQL, cloud Milvus, and configured cloud embedding provider
+- batch configuration: `milvus.write.batch-size=18`, `max-retries=3`, `retry-backoff-ms=1000`
+- scope: a 60-record operational sample; this is not a 50K capacity extrapolation
+- evidence: `scripts/run-import-benchmark.ps1` and the committed snapshot `docs/benchmarks/import-benchmark-live-20260810.json`
+- decision: keep the `novelId`-isolated benchmark path and repeat with a larger dataset before making capacity claims
+
 ## Reproducible Live Run
 
 The API-backed runner keeps the benchmark command out of oral explanations:
@@ -65,6 +92,17 @@ pwsh -File scripts/run-rag-evaluation.ps1 `
 ```
 
 The command prints the stable profile, dataset version, recall metrics, latency percentiles, and retrieved-context size. It writes the complete response when `-OutputPath` is supplied. A live run requires a reachable MySQL database, Milvus collection, and configured embedding provider.
+
+For import throughput, use a temporary positive `novelId` and clean it after the run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-import-benchmark.ps1 `
+  -FilePath C:/datasets/novel_cn_sample.jsonl `
+  -BaseUrl http://localhost:8080 `
+  -NovelId 926345375 `
+  -OutputPath artifacts/import-benchmark-live.json `
+  -Cleanup
+```
 
 ## Optimization Log Template
 

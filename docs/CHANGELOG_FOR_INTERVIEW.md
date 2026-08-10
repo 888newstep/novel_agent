@@ -130,7 +130,7 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - change: added context-size metrics to the RAG report, added `scripts/run-rag-evaluation.ps1`, recorded a deterministic ranking case and post-generation regression case, and normalized core Markdown files to UTF-8 without BOM
 - result: GitHub readers can distinguish CI fixture evidence from live Milvus numbers, reproduce the API-backed evaluation command, and follow measurable retrieval and generation cases without oral context
 - tradeoff: fixture results remain explicitly non-production evidence; live latency and throughput still require a reachable environment
-- evidence: `docs/BENCHMARK_REPORT.md`, `docs/WRITING_QUALITY_CASES.md`, `docs/METRICS_BASELINE.md`, `scripts/run-rag-evaluation.ps1`, and the 23-test Maven baseline
+- evidence: `docs/BENCHMARK_REPORT.md`, `docs/WRITING_QUALITY_CASES.md`, `docs/METRICS_BASELINE.md`, `scripts/run-rag-evaluation.ps1`, and the 26-test Maven baseline
 
 ### 2026-08-10 (live Milvus validation and collection lifecycle hardening)
 
@@ -149,3 +149,12 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - result: the resolved runtime graph is materially smaller, the identified old component versions are no longer selected, and the full test suite remains green
 - tradeoff: the SDK and transport stack now have an explicit upgrade boundary that must be regression-tested together
 - evidence: `pom.xml`, `docs/DEPENDENCY_SECURITY.md`, `.github/dependabot.yml`, `.github/workflows/ci.yml`, and the full Maven test baseline
+
+### 2026-08-10 (isolated import benchmark and novel-scoped checkpoints)
+
+- topic: import throughput evidence and data isolation
+- problem: the import benchmark path wrote every training segment to `novel_id=0`, so a live throughput run could pollute the shared corpus and retry cleanup was not novel-scoped
+- change: added an explicit `novelId` import overload, novel-aware segment rows, novel-aware retry cleanup, isolated checkpoint suffixes, enriched status metrics, and `scripts/run-import-benchmark.ps1`
+- result: a live 60-record run produced 120 segments in `8.176s` service time at `7.34 records/s` and `14.68 segments/s`, with `0` retries, `1` flush, and `0` failures; the temporary id was deleted from all Milvus collections afterward
+- tradeoff: the benchmark uses a small operational sample and must not be presented as a 50K capacity claim; larger runs still need the same cleanup discipline
+- evidence: `src/main/java/com/novel/agent/service/DataImportService.java`, `src/main/java/com/novel/agent/controller/DataImportController.java`, `src/test/java/com/novel/agent/service/DataImportServiceTest.java`, `scripts/run-import-benchmark.ps1`, and `docs/BENCHMARK_REPORT.md`

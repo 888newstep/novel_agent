@@ -1,0 +1,35 @@
+{
+  "benchmarkId": "IMPORT-LIVE-20260810",
+  "date": "2026-08-10",
+  "inputFormat": "json_lines",
+  "sourceRecordCount": 60,
+  "importedRecordCount": 60,
+  "segmentCount": 120,
+  "serviceDurationMs": 8176,
+  "wallClockDurationMs": 10264,
+  "recordsPerSecond": 7.34,
+  "segmentsPerSecond": 14.68,
+  "batchCount": 7,
+  "flushCount": 1,
+  "retryCount": 0,
+  "failureCount": 0,
+  "checkpointExistsAfterCompletion": false,
+  "cleanupSucceeded": true,
+  "environment": {
+    "mysql": "local",
+    "milvus": "cloud",
+    "embeddingProvider": "configured cloud provider",
+    "batchSize": 18,
+    "maxRetries": 3,
+    "retryBackoffMs": 1000
+  },
+  "isolation": {
+    "mode": "temporary positive novelId",
+    "sharedNovelIdModified": false,
+    "temporaryNovelVectorsRemoved": true
+  },
+  "caveats": [
+    "This is a small operational sample, not a 50K-record capacity extrapolation.",
+    "The benchmark measures the configured embedding provider and current cloud Milvus path; repeat it on the target host before making capacity claims."
+  ]
+}

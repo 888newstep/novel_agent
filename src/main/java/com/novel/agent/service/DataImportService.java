@@ -57,12 +57,27 @@ public class DataImportService {
     private volatile Map<String, Object> importStatus = createIdleStatus();
 
     public ImportResult importFromJson(String jsonFilePath) {
+        return importFromJson(jsonFilePath, 0L);
+    }
+
+    /**
+     * Imports records for one novel while preserving the legacy novelId=0 path.
+     */
+    public ImportResult importFromJson(String jsonFilePath, long novelId) {
+        if (jsonFilePath == null || jsonFilePath.isBlank()) {
+            throw new IllegalArgumentException("import file path must not be blank");
+        }
+        if (novelId < 0) {
+            throw new IllegalArgumentException("novelId must be non-negative");
+        }
+
         Path jsonPath = Paths.get(jsonFilePath);
         if (!Files.exists(jsonPath)) {
             throw new IllegalArgumentException("文件不存在: " + jsonFilePath);
         }
 
-        Path checkpointPath = getCheckpointPath(jsonPath);
+        Path checkpointPath = getCheckpointPath(jsonPath, novelId);
+        long startedAt = System.currentTimeMillis();
         running = true;
         currentProgress.set(0);
         totalCount.set(0);
@@ -71,6 +86,7 @@ public class DataImportService {
                 "running", true,
                 "stage", "preparing",
                 "filePath", jsonFilePath,
+                "novelId", novelId,
                 "checkpointPath", checkpointPath.toString(),
                 "startedAt", System.currentTimeMillis(),
                 "message", "preparing import task",
@@ -107,31 +123,52 @@ public class DataImportService {
             ));
 
             ImportResult result = isArray
-                    ? doImportArray(jsonPath, checkpointPath, skipRecords)
-                    : doImportLines(jsonPath, checkpointPath, skipRecords);
+                    ? doImportArray(jsonPath, checkpointPath, skipRecords, novelId)
+                    : doImportLines(jsonPath, checkpointPath, skipRecords, novelId);
 
             Files.deleteIfExists(checkpointPath);
-            updateStatus(Map.of(
-                    "running", false,
-                    "stage", "completed",
-                    "finishedAt", System.currentTimeMillis(),
-                    "processedRecords", currentProgress.get(),
-                    "successCount", result.successCount,
-                    "failCount", result.failCount,
-                    "lastCheckpointRecord", currentProgress.get(),
-                    "checkpointExists", false,
-                    "message", "import finished successfully"
-            ));
+            long importedRecordCount = Math.max(0L, currentProgress.get() - skipRecords);
+            long durationMs = elapsedMillis(startedAt);
+            result.novelId = novelId;
+            result.sourceRecordCount = estimated;
+            result.importedRecordCount = importedRecordCount;
+            result.durationMs = durationMs;
+            result.recordsPerSecond = calculateRate(importedRecordCount, durationMs);
+            result.segmentsPerSecond = calculateRate(result.successCount, durationMs);
+
+            Map<String, Object> completedPatch = new LinkedHashMap<>();
+            completedPatch.put("running", false);
+            completedPatch.put("stage", "completed");
+            completedPatch.put("finishedAt", System.currentTimeMillis());
+            completedPatch.put("processedRecords", currentProgress.get());
+            completedPatch.put("successCount", result.successCount);
+            completedPatch.put("failCount", result.failCount);
+            completedPatch.put("failureCount", result.failCount);
+            completedPatch.put("lastCheckpointRecord", currentProgress.get());
+            completedPatch.put("checkpointExists", false);
+            completedPatch.put("novelId", novelId);
+            completedPatch.put("sourceRecordCount", estimated);
+            completedPatch.put("importedRecordCount", importedRecordCount);
+            completedPatch.put("durationMs", durationMs);
+            completedPatch.put("recordsPerSecond", result.recordsPerSecond);
+            completedPatch.put("segmentsPerSecond", result.segmentsPerSecond);
+            completedPatch.put("batchCount", (long) result.batchCount);
+            completedPatch.put("flushCount", (long) result.flushCount);
+            completedPatch.put("retryCount", result.retryCount);
+            completedPatch.put("message", "import finished successfully");
+            updateStatus(completedPatch);
             return result;
         } catch (Exception ex) {
-            updateStatus(Map.of(
-                    "running", false,
-                    "stage", "failed",
-                    "finishedAt", System.currentTimeMillis(),
-                    "lastError", ex.getMessage() == null ? "unknown error" : ex.getMessage(),
-                    "checkpointExists", Files.exists(checkpointPath),
-                    "message", "import failed"
-            ));
+            Map<String, Object> failedPatch = new LinkedHashMap<>();
+            failedPatch.put("running", false);
+            failedPatch.put("stage", "failed");
+            failedPatch.put("finishedAt", System.currentTimeMillis());
+            failedPatch.put("lastError", ex.getMessage() == null ? "unknown error" : ex.getMessage());
+            failedPatch.put("checkpointExists", Files.exists(checkpointPath));
+            failedPatch.put("novelId", novelId);
+            failedPatch.put("durationMs", elapsedMillis(startedAt));
+            failedPatch.put("message", "import failed");
+            updateStatus(failedPatch);
             log.error("import failed", ex);
             throw new RuntimeException("导入失败: " + ex.getMessage(), ex);
         } finally {
@@ -160,7 +197,10 @@ public class DataImportService {
         return Math.max(1, fileSize / 11_500);
     }
 
-    private ImportResult doImportArray(Path jsonPath, Path checkpointPath, long skipRecords) throws IOException {
+    private ImportResult doImportArray(Path jsonPath,
+                                       Path checkpointPath,
+                                       long skipRecords,
+                                       long novelId) throws IOException {
         ImportResult result = new ImportResult();
         long processed = 0;
         int batchCount = 0;
@@ -185,10 +225,10 @@ public class DataImportService {
                 JsonObject json = readJsonObject(reader);
                 processed++;
                 try {
-                    appendTrainingRows(batch, embedTexts, json, processed, result);
+                    appendTrainingRows(batch, embedTexts, json, processed, novelId, result);
                     if (batch.size() >= batchSize) {
                         batchCount++;
-                        processBatch(batch, embedTexts, result, processed, batchCount, flushCount, "importing_array");
+                        processBatch(batch, embedTexts, result, processed, batchCount, flushCount, novelId, "importing_array");
                         if (batchCount % AUTO_FLUSH_BATCH_INTERVAL == 0) {
                             flushCount++;
                             flushSegments();
@@ -214,7 +254,7 @@ public class DataImportService {
 
         if (!batch.isEmpty()) {
             batchCount++;
-            processBatch(batch, embedTexts, result, processed, batchCount, flushCount, "importing_array");
+            processBatch(batch, embedTexts, result, processed, batchCount, flushCount, novelId, "importing_array");
             checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "checkpoint_saved");
         }
 
@@ -227,8 +267,11 @@ public class DataImportService {
                 "successCount", result.successCount,
                 "failCount", result.failCount,
                 "batchCount", (long) batchCount,
+                "retryCount", result.retryCount,
                 "message", "final flush completed"
         ));
+        result.batchCount = batchCount;
+        result.flushCount = flushCount;
         return result;
     }
 
@@ -252,7 +295,10 @@ public class DataImportService {
         return obj;
     }
 
-    private ImportResult doImportLines(Path jsonPath, Path checkpointPath, long skipLines) throws IOException {
+    private ImportResult doImportLines(Path jsonPath,
+                                       Path checkpointPath,
+                                       long skipLines,
+                                       long novelId) throws IOException {
         ImportResult result = new ImportResult();
         long processed = skipLines;
         long lineNum = 0;
@@ -281,10 +327,10 @@ public class DataImportService {
                 try {
                     JsonObject json = JsonParser.parseString(trimmed).getAsJsonObject();
                     processed = lineNum;
-                    appendTrainingRows(batch, embedTexts, json, processed, result);
+                    appendTrainingRows(batch, embedTexts, json, processed, novelId, result);
                     if (batch.size() >= batchSize) {
                         batchCount++;
-                        processBatch(batch, embedTexts, result, processed, batchCount, flushCount, "importing_lines");
+                        processBatch(batch, embedTexts, result, processed, batchCount, flushCount, novelId, "importing_lines");
                         if (batchCount % AUTO_FLUSH_BATCH_INTERVAL == 0) {
                             flushCount++;
                             flushSegments();
@@ -310,7 +356,7 @@ public class DataImportService {
 
         if (!batch.isEmpty()) {
             batchCount++;
-            processBatch(batch, embedTexts, result, processed, batchCount, flushCount, "importing_lines");
+            processBatch(batch, embedTexts, result, processed, batchCount, flushCount, novelId, "importing_lines");
             checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "checkpoint_saved");
         }
 
@@ -323,8 +369,11 @@ public class DataImportService {
                 "successCount", result.successCount,
                 "failCount", result.failCount,
                 "batchCount", (long) batchCount,
+                "retryCount", result.retryCount,
                 "message", "final flush completed"
         ));
+        result.batchCount = batchCount;
+        result.flushCount = flushCount;
         return result;
     }
 
@@ -332,6 +381,7 @@ public class DataImportService {
                                     List<String> embedTexts,
                                     JsonObject json,
                                     long chapterNum,
+                                    long novelId,
                                     ImportResult result) {
         String instruction = getString(json, "instruction");
         String input = getString(json, "input");
@@ -345,19 +395,23 @@ public class DataImportService {
         long timestamp = System.currentTimeMillis() / 1000;
         if (!input.isEmpty()) {
             String inputContent = normalizeContent("指令：" + instruction + "\n上文：" + input);
-            batch.add(createSegmentRow(chapterNum, 1, timestamp, inputContent));
+            batch.add(createSegmentRow(novelId, chapterNum, 1, timestamp, inputContent));
             embedTexts.add(inputContent);
         }
         if (!output.isEmpty()) {
             String outputContent = normalizeContent("指令：" + instruction + "\n续写：" + output);
-            batch.add(createSegmentRow(chapterNum, 2, timestamp, outputContent));
+            batch.add(createSegmentRow(novelId, chapterNum, 2, timestamp, outputContent));
             embedTexts.add(outputContent);
         }
     }
 
-    private JsonObject createSegmentRow(long chapterNum, int segmentType, long timestamp, String content) {
+    private JsonObject createSegmentRow(long novelId,
+                                        long chapterNum,
+                                        int segmentType,
+                                        long timestamp,
+                                        String content) {
         JsonObject row = new JsonObject();
-        row.addProperty("novel_id", 0L);
+        row.addProperty("novel_id", novelId);
         row.addProperty("chapter_num", chapterNum);
         row.addProperty("segment_type", segmentType);
         row.addProperty("content", content);
@@ -376,6 +430,7 @@ public class DataImportService {
                               long processed,
                               int batchCount,
                               int flushCount,
+                              long novelId,
                               String sourceStage) {
         int safeMaxRetries = Math.max(1, maxRetries);
         BatchRange batchRange = extractChapterRange(rows);
@@ -386,6 +441,7 @@ public class DataImportService {
             try {
                 if (attempt > 1) {
                     long retryCount = attempt - 1L;
+                    result.retryCount++;
                     Map<String, Object> retryPatch = new LinkedHashMap<>();
                     retryPatch.put("stage", "retrying_batch");
                     retryPatch.put("processedRecords", processed);
@@ -394,7 +450,7 @@ public class DataImportService {
                     retryPatch.put("currentBatchSize", rows.size());
                     retryPatch.put("successCount", result.successCount);
                     retryPatch.put("failCount", result.failCount);
-                    retryPatch.put("retryCount", retryCount);
+                    retryPatch.put("retryCount", result.retryCount);
                     retryPatch.put("lastRetriedRange", retryRange);
                     retryPatch.put("lastRetryReason", lastException == null || lastException.getMessage() == null
                             ? "batch failed"
@@ -404,7 +460,7 @@ public class DataImportService {
                     updateStatus(retryPatch);
 
                     sleepBackoff(retryCount);
-                    deleteSegmentRange(batchRange);
+                    deleteSegmentRange(batchRange, novelId);
                 }
 
                 Map<String, Object> embeddingPatch = new LinkedHashMap<>();
@@ -415,7 +471,7 @@ public class DataImportService {
                 embeddingPatch.put("currentBatchSize", rows.size());
                 embeddingPatch.put("successCount", result.successCount);
                 embeddingPatch.put("failCount", result.failCount);
-                embeddingPatch.put("retryCount", (long) (attempt - 1));
+                embeddingPatch.put("retryCount", result.retryCount);
                 embeddingPatch.put("message", attempt == 1
                         ? "generating embeddings for current batch"
                         : "regenerating embeddings for retried batch");
@@ -434,7 +490,7 @@ public class DataImportService {
                     insertingPatch.put("currentBatchSize", preparedBatch.validRows().size());
                     insertingPatch.put("successCount", result.successCount);
                     insertingPatch.put("failCount", result.failCount);
-                    insertingPatch.put("retryCount", (long) (attempt - 1));
+                    insertingPatch.put("retryCount", result.retryCount);
                     insertingPatch.put("message", "inserting batch into milvus");
                     insertingPatch.put("sourceStage", sourceStage);
                     updateStatus(insertingPatch);
@@ -479,7 +535,7 @@ public class DataImportService {
         failedPatch.put("currentBatchSize", failedRows);
         failedPatch.put("successCount", result.successCount);
         failedPatch.put("failCount", result.failCount);
-        failedPatch.put("retryCount", (long) safeMaxRetries);
+        failedPatch.put("retryCount", result.retryCount);
         failedPatch.put("lastRetriedRange", retryRange);
         failedPatch.put("lastRetryReason", lastException == null || lastException.getMessage() == null
                 ? "batch failed"
@@ -544,13 +600,14 @@ public class DataImportService {
         return new BatchRange(minChapter, maxChapter);
     }
 
-    private void deleteSegmentRange(BatchRange batchRange) {
+    private void deleteSegmentRange(BatchRange batchRange, long novelId) {
         if (!batchRange.isValid()) {
             return;
         }
         milvusClient.delete(DeleteReq.builder()
                 .collectionName(segmentsCollection)
-                .filter(String.format("novel_id == 0 && chapter_num >= %d && chapter_num <= %d",
+                .filter(String.format("novel_id == %d && chapter_num >= %d && chapter_num <= %d",
+                        novelId,
                         batchRange.fromChapter(),
                         batchRange.toChapter()))
                 .build());
@@ -596,8 +653,12 @@ public class DataImportService {
                 .build());
     }
 
-    private Path getCheckpointPath(Path jsonPath) {
-        return jsonPath.resolveSibling(jsonPath.getFileName().toString() + CHECKPOINT_SUFFIX);
+    private Path getCheckpointPath(Path jsonPath, long novelId) {
+        if (novelId == 0L) {
+            return jsonPath.resolveSibling(jsonPath.getFileName().toString() + CHECKPOINT_SUFFIX);
+        }
+        return jsonPath.resolveSibling(jsonPath.getFileName().toString()
+                + ".novel-" + novelId + CHECKPOINT_SUFFIX);
     }
 
     private long readCheckpoint(Path checkpointPath) {
@@ -663,6 +724,7 @@ public class DataImportService {
         status.put("running", false);
         status.put("stage", "idle");
         status.put("filePath", "");
+        status.put("novelId", 0L);
         status.put("checkpointPath", "");
         status.put("startedAt", 0L);
         status.put("finishedAt", 0L);
@@ -681,6 +743,12 @@ public class DataImportService {
         status.put("checkpointExists", false);
         status.put("currentBatchSize", 0);
         status.put("retryCount", 0L);
+        status.put("failureCount", 0L);
+        status.put("sourceRecordCount", 0L);
+        status.put("importedRecordCount", 0L);
+        status.put("durationMs", 0L);
+        status.put("recordsPerSecond", 0D);
+        status.put("segmentsPerSecond", 0D);
         status.put("lastRetryReason", "");
         status.put("lastRetriedRange", "");
         status.put("progressPct", 0D);
@@ -702,6 +770,17 @@ public class DataImportService {
         }
     }
 
+    private long elapsedMillis(long startedAt) {
+        return Math.max(1L, System.currentTimeMillis() - startedAt);
+    }
+
+    private double calculateRate(long count, long durationMs) {
+        if (count <= 0 || durationMs <= 0) {
+            return 0D;
+        }
+        return Math.round(count * 100_000D / durationMs) / 100D;
+    }
+
     private String getString(JsonObject json, String key) {
         if (json.has(key) && !json.get(key).isJsonNull()) {
             return json.get(key).getAsString();
@@ -710,9 +789,18 @@ public class DataImportService {
     }
 
     public static class ImportResult {
+        public long novelId;
+        public long sourceRecordCount;
+        public long importedRecordCount;
         public long totalProcessed = 0;
         public long successCount = 0;
         public long failCount = 0;
+        public int batchCount;
+        public int flushCount;
+        public long retryCount;
+        public long durationMs;
+        public double recordsPerSecond;
+        public double segmentsPerSecond;
 
         @Override
         public String toString() {

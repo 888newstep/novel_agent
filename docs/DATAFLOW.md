@@ -363,6 +363,7 @@ Milvus 负责存放“可被语义召回的文本片段与对象描述”。
 关键方法：
 
 - `importFromJson(String jsonFilePath)`
+- `importFromJson(String jsonFilePath, long novelId)`
 - `detectFormat(...)`
 - `doImportArray(...)`
 - `doImportLines(...)`
@@ -370,6 +371,8 @@ Milvus 负责存放“可被语义召回的文本片段与对象描述”。
 - `getProgress()`
 - `getTotal()`
 - `isRunning()`
+
+For a non-zero `novelId`, segment rows, retry cleanup, and checkpoint files are isolated to that novel.
 
 说明：
 

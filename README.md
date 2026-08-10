@@ -29,6 +29,7 @@ Story data -> structured knowledge -> chapter-aware retrieval
 1. Verify `GET /api/v1/novel/health`.
 2. Create or select a novel through `/api/v1/novel`.
 3. Import data with `POST /api/import/training-data` and observe `/api/import/progress`.
+   For an isolated benchmark, use `POST /api/import/training-data/{novelId}` and pass `filePath`.
 4. Preview memory with `GET /api/v1/novel/{novelId}/memory`.
 5. Generate with `POST /api/v1/novel/{novelId}/generate`.
 6. Inspect `memoryLayers`, `consistencyCheck`, `generationTrace`, `postGenerationCheck`, and `degradationPolicy`.
@@ -53,10 +54,10 @@ See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walk
 |------|--------------------|----------|
 | Retrieval quality | Writing-specific dataset with `Recall@K`, `Precision@K`, `MRR`, context size, `P95`, and `P99` | `docs/BENCHMARK_REPORT.md` |
 | Generation control | Layered memory, consistency warnings, trace output, and post-generation checks | `src/main/java/com/novel/agent/controller/NovelController.java` |
-| Import stability | Streaming import, checkpoints, progress reporting, and idempotent retries | `src/main/java/com/novel/agent/service/DataImportService.java` |
+| Import stability | Streaming import, novel-scoped checkpoints, progress reporting, and idempotent retries | `src/main/java/com/novel/agent/service/DataImportService.java` |
 | Cost governance | Scoped budgets, degradation events, model fallback, and outline fallback | `src/main/java/com/novel/agent/service/TokenCostService.java` |
 | Dependency hygiene | Security-fixed transitive baselines, Dependabot, and PR dependency review | `docs/DEPENDENCY_SECURITY.md` |
-| Regression safety | 22 automated tests across service and controller layers | `docs/TEST_MATRIX.md` |
+| Regression safety | 26 automated tests across service and controller layers | `docs/TEST_MATRIX.md` |
 
 ## Tech Stack
 
@@ -138,6 +139,7 @@ The default application address is `http://localhost:8080`.
 | Memory preview | `GET /api/v1/novel/{novelId}/memory` |
 | Retrieval search | `POST /api/v1/novel/{novelId}/search` |
 | Training-data import | `POST /api/import/training-data` |
+| Isolated training-data import | `POST /api/import/training-data/{novelId}` |
 | Import progress | `GET /api/import/progress` |
 | RAG evaluation | `POST /api/v1/novel/evaluate/segments` |
 | Cost summary | `GET /api/admin/cost/summary` |
@@ -162,7 +164,7 @@ The default application address is `http://localhost:8080`.
 
 ## Verification Baseline
 
-The current repository includes 22 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, and controller APIs.
+The current repository includes 26 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, and controller APIs.
 
 ```powershell
 mvn test -DskipITs

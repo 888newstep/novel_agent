@@ -62,4 +62,16 @@ class DataImportControllerTest {
         assertThat(response.get("success")).isEqualTo(false);
         assertThat(response.get("status")).isEqualTo(status);
     }
+
+    @Test
+    void isolatedImportRejectsNegativeNovelId() {
+        DataImportService dataImportService = mock(DataImportService.class);
+        MilvusAdminService milvusAdminService = mock(MilvusAdminService.class);
+        DataImportController controller = new DataImportController(dataImportService, milvusAdminService);
+
+        Map<String, Object> response = controller.importTrainingDataForNovel(-1L, "D:/dataset.jsonl");
+
+        assertThat(response.get("success")).isEqualTo(false);
+        assertThat(response.get("message")).isEqualTo("novelId must be non-negative");
+    }
 }

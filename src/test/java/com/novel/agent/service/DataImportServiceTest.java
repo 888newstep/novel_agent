@@ -54,7 +54,10 @@ class DataImportServiceTest {
         assertThat(result.successCount).isEqualTo(2L);
         assertThat(result.failCount).isEqualTo(0L);
         assertThat(result.totalProcessed).isEqualTo(2L);
+        assertThat(result.novelId).isEqualTo(0L);
+        assertThat(result.retryCount).isEqualTo(1L);
         assertThat(status.get("stage")).isEqualTo("completed");
+        assertThat(status.get("novelId")).isEqualTo(0L);
         assertThat(status.get("retryCount")).isEqualTo(1L);
         assertThat(status.get("lastRetriedRange")).isEqualTo("1");
         assertThat(status.get("lastRetryReason")).isEqualTo("insert failed once");
@@ -93,13 +96,66 @@ class DataImportServiceTest {
 
         Map<String, Object> status = service.getImportStatus();
         assertThat(status.get("stage")).isEqualTo("failed");
-        assertThat(status.get("retryCount")).isEqualTo(2L);
+        assertThat(status.get("retryCount")).isEqualTo(1L);
         assertThat(status.get("lastRetryReason")).isEqualTo("insert still failing");
         assertThat(status.get("checkpointExists")).isEqualTo(false);
 
         verify(milvusClient, times(2)).insert(any(InsertReq.class));
         verify(milvusClient, times(1)).delete(any(DeleteReq.class));
         verify(embeddingService, times(2)).batchGenerateEmbedding(anyList());
+    }
+
+    @Test
+    void isolatesCustomNovelIdForRowsAndRetryCleanup(@TempDir Path tempDir) throws Exception {
+        MilvusClientV2 milvusClient = mock(MilvusClientV2.class);
+        EmbeddingService embeddingService = mock(EmbeddingService.class);
+        DataImportService service = new DataImportService(milvusClient, embeddingService);
+        configure(service, 1, 2, 0L);
+
+        Path dataset = tempDir.resolve("dataset.jsonl");
+        Files.writeString(dataset, """
+                {"instruction":"write","input":"scene","output":"continuation"}
+                """);
+
+        when(embeddingService.batchGenerateEmbedding(anyList())).thenReturn(List.of(
+                List.of(0.1f, 0.2f),
+                List.of(0.3f, 0.4f)
+        ));
+        when(milvusClient.insert(any(InsertReq.class)))
+                .thenThrow(new RuntimeException("insert failed once"))
+                .thenReturn(mock(InsertResp.class));
+        when(milvusClient.delete(any(DeleteReq.class))).thenReturn(mock(DeleteResp.class));
+
+        DataImportService.ImportResult result = service.importFromJson(dataset.toString(), 42L);
+        Map<String, Object> status = service.getImportStatus();
+
+        assertThat(result.novelId).isEqualTo(42L);
+        assertThat(status.get("novelId")).isEqualTo(42L);
+        assertThat(status.get("stage")).isEqualTo("completed");
+        assertThat(Files.exists(dataset.resolveSibling("dataset.jsonl.checkpoint"))).isFalse();
+        assertThat(Files.exists(dataset.resolveSibling("dataset.jsonl.novel-42.checkpoint"))).isFalse();
+
+        ArgumentCaptor<DeleteReq> deleteCaptor = ArgumentCaptor.forClass(DeleteReq.class);
+        ArgumentCaptor<InsertReq> insertCaptor = ArgumentCaptor.forClass(InsertReq.class);
+        verify(milvusClient, times(2)).insert(insertCaptor.capture());
+        verify(milvusClient).delete(deleteCaptor.capture());
+        assertThat(deleteCaptor.getValue().getFilter())
+                .isEqualTo("novel_id == 42 && chapter_num >= 1 && chapter_num <= 1");
+        assertThat(String.valueOf(insertCaptor.getAllValues().get(1).getData()))
+                .contains("\"novel_id\":42");
+    }
+
+    @Test
+    void rejectsNegativeNovelId(@TempDir Path tempDir) throws Exception {
+        MilvusClientV2 milvusClient = mock(MilvusClientV2.class);
+        EmbeddingService embeddingService = mock(EmbeddingService.class);
+        DataImportService service = new DataImportService(milvusClient, embeddingService);
+        Path dataset = tempDir.resolve("dataset.jsonl");
+        Files.writeString(dataset, "{}");
+
+        assertThatThrownBy(() -> service.importFromJson(dataset.toString(), -1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("novelId");
     }
 
     private void configure(DataImportService service, int batchSize, int maxRetries, long retryBackoffMs) {

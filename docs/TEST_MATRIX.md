@@ -1,6 +1,6 @@
 # Test Matrix
 
-Updated: 2026-08-09
+Updated: 2026-08-10
 
 ## Purpose
 
@@ -11,7 +11,7 @@ It is intentionally written as a GitHub-facing engineering document instead of a
 
 - build entry: `mvn test -DskipITs`
 - latest verified status: pass
-- current automated test count: 22
+- current automated test count: 26
 - test types currently covered:
   - service-level unit tests
   - controller contract tests
