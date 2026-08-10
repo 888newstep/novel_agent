@@ -131,3 +131,12 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - result: GitHub readers can distinguish CI fixture evidence from live Milvus numbers, reproduce the API-backed evaluation command, and follow measurable retrieval and generation cases without oral context
 - tradeoff: fixture results remain explicitly non-production evidence; live latency and throughput still require a reachable environment
 - evidence: `docs/BENCHMARK_REPORT.md`, `docs/WRITING_QUALITY_CASES.md`, `docs/METRICS_BASELINE.md`, `scripts/run-rag-evaluation.ps1`, and the 22-test Maven baseline
+
+### 2026-08-10 (dependency security hardening)
+
+- topic: dependency security and supply-chain maintenance
+- problem: GitHub reported a high-severity dependency alert caused by old transitive components in the Milvus SDK graph
+- change: added explicit Maven security baselines, upgraded the MySQL connector, enabled Dependabot for Maven and GitHub Actions, and added pull-request dependency review
+- result: the resolved runtime tree no longer uses the identified old component versions, while the Milvus SDK API remains unchanged
+- tradeoff: dependency overrides must be regression-tested when the SDK or transport stack changes
+- evidence: `pom.xml`, `docs/DEPENDENCY_SECURITY.md`, `.github/dependabot.yml`, `.github/workflows/ci.yml`, and the full Maven test baseline

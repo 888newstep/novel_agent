@@ -55,6 +55,7 @@ See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walk
 | Generation control | Layered memory, consistency warnings, trace output, and post-generation checks | `src/main/java/com/novel/agent/controller/NovelController.java` |
 | Import stability | Streaming import, checkpoints, progress reporting, and idempotent retries | `src/main/java/com/novel/agent/service/DataImportService.java` |
 | Cost governance | Scoped budgets, degradation events, model fallback, and outline fallback | `src/main/java/com/novel/agent/service/TokenCostService.java` |
+| Dependency hygiene | Security-fixed transitive baselines, Dependabot, and PR dependency review | `docs/DEPENDENCY_SECURITY.md` |
 | Regression safety | 22 automated tests across service and controller layers | `docs/TEST_MATRIX.md` |
 
 ## Tech Stack
@@ -155,6 +156,7 @@ The default application address is `http://localhost:8080`.
 - `docs/TEST_MATRIX.md`
 - `docs/METRICS_BASELINE.md`
 - `docs/COST_GOVERNANCE_CASE.md`
+- `docs/DEPENDENCY_SECURITY.md`
 - `CONTRIBUTING.md`
 - `SECURITY.md`
 

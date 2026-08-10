@@ -126,6 +126,7 @@ Goal: make the project look maintainable, not just functional.
 - [x] add issue templates and pull request template for GitHub
 - [x] add coverage reporting or at least a documented test matrix
 - [x] add a small metrics document covering import throughput, retrieval latency, and token cost
+- [x] pin vulnerable transitive dependencies and automate pull-request dependency review
 
 ## 5. Concrete Deliverables For SP
 

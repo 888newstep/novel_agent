@@ -15,3 +15,7 @@ Preferred process:
 3. Include impact, reproduction steps, affected area, and any mitigation ideas.
 
 We will review the report, validate impact, and coordinate a fix before public disclosure.
+
+## Dependency Security
+
+The dependency version baseline and upgrade procedure are documented in [`docs/DEPENDENCY_SECURITY.md`](docs/DEPENDENCY_SECURITY.md). Pull requests also run automated dependency review through GitHub Actions.
