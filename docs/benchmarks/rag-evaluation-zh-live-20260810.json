@@ -1,0 +1,20 @@
+{
+  "runId": "R1-ZH-LIVE-20260810",
+  "status": "blocked",
+  "runDate": "2026-08-10",
+  "profileName": "writing-zh-live-v1",
+  "datasetVersion": "2026-08-10",
+  "novelId": 0,
+  "topK": 5,
+  "queryCount": 15,
+  "environment": {
+    "mysql": "configured",
+    "milvus": "configured_but_tcp_unreachable",
+    "embeddingProvider": "configured"
+  },
+  "semanticMetrics": null,
+  "latencyMetrics": null,
+  "vectorsWritten": false,
+  "reason": "The configured Milvus TCP endpoint was not reachable during application startup, so the API-backed evaluation did not execute any query.",
+  "nextAction": "Re-run scripts/run-rag-evaluation.ps1 with -Profile writing-zh-live-v1 after the Milvus endpoint is reachable."
+}

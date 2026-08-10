@@ -34,32 +34,62 @@ public class RagEvaluationService {
     private final MilvusSearchService milvusSearchService;
     private final ObjectMapper objectMapper;
 
-    /** 测试数据集（运行时加载） */
-    private List<TestCase> testCases = new ArrayList<>();
+    /** 默认评测 profile，保持既有 API 和 CI fixture 的兼容性。 */
+    public static final String DEFAULT_PROFILE_NAME = "writing-default-v1";
 
-    /** 最后一次评估报告 */
-    private EvaluationReport lastReport;
-
-    /** ??????????? 5 ? */
-    private final Deque<EvaluationSnapshot> reportHistory = new ArrayDeque<>();
+    /** 与云端中文生产语料对齐的评测 profile。 */
+    public static final String CHINESE_LIVE_PROFILE_NAME = "writing-zh-live-v1";
 
     private static final int MAX_HISTORY_SIZE = 5;
-    private static final String DEFAULT_PROFILE_NAME = "writing-default-v1";
     private static final String DEFAULT_DATASET_VERSION = "2026-08-09";
+    private static final String CHINESE_LIVE_DATASET_VERSION = "2026-08-10";
+    private static final Map<String, DatasetDefinition> DATASET_DEFINITIONS = createDatasetDefinitions();
+
+    /** 默认数据集缓存，保留旧的无参访问方式。 */
+    private List<TestCase> testCases = List.of();
+
+    /** 按 profile 隔离数据集、历史和最近报告，避免跨语料比较。 */
+    private final Map<String, List<TestCase>> datasets = new LinkedHashMap<>();
+    private final Map<String, Deque<EvaluationSnapshot>> reportHistories = new LinkedHashMap<>();
+    private final Map<String, EvaluationReport> lastReports = new LinkedHashMap<>();
+
+    private static Map<String, DatasetDefinition> createDatasetDefinitions() {
+        Map<String, DatasetDefinition> definitions = new LinkedHashMap<>();
+        definitions.put(DEFAULT_PROFILE_NAME,
+                new DatasetDefinition("rag_eval_dataset.json", DEFAULT_DATASET_VERSION));
+        definitions.put(CHINESE_LIVE_PROFILE_NAME,
+                new DatasetDefinition("rag_eval_dataset_zh.json", CHINESE_LIVE_DATASET_VERSION));
+        return Collections.unmodifiableMap(definitions);
+    }
 
     @PostConstruct
-    public void init() {
-        try {
-            ClassPathResource resource = new ClassPathResource("rag_eval_dataset.json");
-            testCases = objectMapper.readValue(
-                    resource.getInputStream(),
-                    new TypeReference<List<TestCase>>() {
-                    }
-            );
-            log.info("RAG 评估数据集加载完成，共 {} 条测试用例", testCases.size());
-        } catch (Exception e) {
-            log.warn("RAG 评估数据集加载失败（不影响项目启动）: {}", e.getMessage());
-        }
+    public synchronized void init() {
+        datasets.clear();
+        reportHistories.clear();
+        lastReports.clear();
+
+        DATASET_DEFINITIONS.forEach((profileName, definition) -> {
+            try {
+                ClassPathResource resource = new ClassPathResource(definition.resourceName());
+                List<TestCase> loadedCases;
+                try (var inputStream = resource.getInputStream()) {
+                    loadedCases = objectMapper.readValue(
+                            inputStream,
+                            new TypeReference<List<TestCase>>() {
+                            }
+                    );
+                }
+                datasets.put(profileName, loadedCases == null ? List.of() : List.copyOf(loadedCases));
+                log.info("RAG 评估数据集加载完成，profile={}，version={}，cases={}",
+                        profileName, definition.datasetVersion(), datasets.get(profileName).size());
+            } catch (Exception e) {
+                datasets.put(profileName, List.of());
+                log.warn("RAG 评估数据集加载失败，profile={}，resource={}，reason={}",
+                        profileName, definition.resourceName(), e.getMessage());
+            }
+        });
+
+        testCases = getTestCases(DEFAULT_PROFILE_NAME);
     }
 
     /**
@@ -70,12 +100,36 @@ public class RagEvaluationService {
      * @return 评估报告
      */
     public EvaluationReport evaluate(Long novelId, int topK) {
-        if (testCases.isEmpty()) {
-            log.warn("RAG evaluation skipped because the test dataset is empty");
-            return EvaluationReport.empty("Test dataset is empty, please check rag_eval_dataset.json");
+        return evaluate(novelId, topK, DEFAULT_PROFILE_NAME);
+    }
+
+    /**
+     * 按指定 profile 运行评估。不同 profile 的历史独立维护，禁止把不同语料的指标直接做 delta。
+     */
+    public synchronized EvaluationReport evaluate(Long novelId, int topK, String profileName) {
+        String normalizedProfile = normalizeProfile(profileName);
+        DatasetDefinition definition = DATASET_DEFINITIONS.get(normalizedProfile);
+        if (definition == null) {
+            String reason = "Unknown evaluation profile: " + normalizedProfile
+                    + "; available profiles: " + String.join(", ", getAvailableProfiles());
+            log.warn("RAG evaluation skipped: {}", reason);
+            return EvaluationReport.empty(normalizedProfile, null, reason);
         }
 
-        log.info("Starting RAG evaluation: novelId={}, topK={}, cases={}", novelId, topK, testCases.size());
+        List<TestCase> cases = datasets.getOrDefault(normalizedProfile, List.of());
+        if (cases.isEmpty()) {
+            String reason = "Test dataset is empty, please check " + definition.resourceName();
+            log.warn("RAG evaluation skipped, profile={}, reason={}", normalizedProfile, reason);
+            return EvaluationReport.empty(normalizedProfile, definition.datasetVersion(), reason);
+        }
+        if (topK <= 0) {
+            String reason = "topK must be greater than 0";
+            log.warn("RAG evaluation skipped, profile={}, reason={}", normalizedProfile, reason);
+            return EvaluationReport.empty(normalizedProfile, definition.datasetVersion(), reason);
+        }
+
+        log.info("Starting RAG evaluation: novelId={}, topK={}, profile={}, cases={}",
+                novelId, topK, normalizedProfile, cases.size());
 
         List<Double> latencies = new ArrayList<>();
         int totalRelevant = 0;
@@ -85,9 +139,19 @@ public class RagEvaluationService {
         long totalRetrievedContextChars = 0L;
         List<QueryResult> detailResults = new ArrayList<>();
 
-        for (TestCase tc : testCases) {
+        for (TestCase tc : cases) {
+            String query = tc == null || tc.getQuery() == null ? "" : tc.getQuery();
+            List<String> expectedKeywords = safeKeywords(tc);
             long startTime = System.currentTimeMillis();
-            List<Map<String, Object>> results = milvusSearchService.searchSegments(novelId, tc.getQuery(), topK);
+            List<Map<String, Object>> results;
+            try {
+                results = milvusSearchService.searchSegments(novelId, query, topK);
+                results = results == null ? List.of() : results;
+            } catch (RuntimeException exception) {
+                log.warn("RAG evaluation query failed, profile={}, query={}, reason={}",
+                        normalizedProfile, query, exception.getMessage());
+                results = List.of();
+            }
             long elapsed = System.currentTimeMillis() - startTime;
             latencies.add((double) elapsed);
 
@@ -96,11 +160,14 @@ public class RagEvaluationService {
             int firstRelevantRank = -1;
 
             for (int rank = 0; rank < results.size(); rank++) {
-                Map<String, Object> item = results.get(rank);
+                Map<String, Object> item = results.get(rank) == null ? Map.of() : results.get(rank);
                 String content = Objects.toString(item.getOrDefault("content", ""), "");
                 boolean isRelevant = false;
                 Set<String> hitKeywords = new LinkedHashSet<>();
-                for (String keyword : tc.getExpectedKeywords()) {
+                for (String keyword : expectedKeywords) {
+                    if (keyword == null || keyword.isBlank()) {
+                        continue;
+                    }
                     if (content.toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT))) {
                         isRelevant = true;
                         hitKeywords.add(keyword);
@@ -125,13 +192,13 @@ public class RagEvaluationService {
             totalRetrieved += results.size();
 
             detailResults.add(new QueryResult(
-                    tc.getQuery(), tc.getCategory(), tc.getExpectedKeywords(),
+                    query, tc == null ? null : tc.getCategory(), expectedKeywords,
                     results.size(), relevantCount, firstRelevantRank,
                     matchedKeywords, resultItems, elapsed
             ));
         }
 
-        int queryCount = testCases.size();
+        int queryCount = cases.size();
         double recallAtK = safeRatio(queriesWithRelevantResult, queryCount);
         double precisionAtK = safeRatio(totalRelevant, totalRetrieved);
         double mrr = mrrSum / Math.max(queryCount, 1);
@@ -141,15 +208,16 @@ public class RagEvaluationService {
         double minLatency = latencies.stream().mapToDouble(d -> d).min().orElse(0);
         double maxLatency = latencies.stream().mapToDouble(d -> d).max().orElse(0);
 
-        long totalKeywords = testCases.stream()
-                .mapToLong(tc -> tc.getExpectedKeywords().size())
+        long totalKeywords = cases.stream()
+                .mapToLong(tc -> safeKeywords(tc).size())
                 .sum();
         long totalMatchedKeywords = detailResults.stream()
                 .mapToLong(qr -> qr.getMatchedKeywords().size())
                 .sum();
         double keywordCoverage = safeRatio(totalMatchedKeywords, totalKeywords);
 
-        List<CategorySummary> categorySummaries = buildCategorySummaries(detailResults);
+        Deque<EvaluationSnapshot> reportHistory = reportHistories.computeIfAbsent(
+                normalizedProfile, ignored -> new ArrayDeque<>());
         EvaluationSnapshot previousSnapshot = reportHistory.peekLast();
         EvaluationSnapshot currentSnapshot = new EvaluationSnapshot(
                 System.currentTimeMillis(),
@@ -164,32 +232,34 @@ public class RagEvaluationService {
                 keywordCoverage,
                 queriesWithRelevantResult
         );
-        currentSnapshot.setProfileName(DEFAULT_PROFILE_NAME);
-        currentSnapshot.setDatasetVersion(DEFAULT_DATASET_VERSION);
+        currentSnapshot.setProfileName(normalizedProfile);
+        currentSnapshot.setDatasetVersion(definition.datasetVersion());
         EvaluationComparison comparison = buildComparison(previousSnapshot, currentSnapshot);
 
-        lastReport = new EvaluationReport(
+        EvaluationReport report = new EvaluationReport(
                 currentSnapshot.getTimestamp(),
                 queryCount, topK, recallAtK, precisionAtK, mrr,
                 avgLatency, p95Latency, p99Latency, minLatency, maxLatency,
                 keywordCoverage, queriesWithRelevantResult, detailResults
         );
-        lastReport.setProfileName(DEFAULT_PROFILE_NAME);
-        lastReport.setDatasetVersion(DEFAULT_DATASET_VERSION);
-        lastReport.setCategorySummaries(categorySummaries);
-        lastReport.setComparison(comparison);
+        report.setProfileName(normalizedProfile);
+        report.setDatasetVersion(definition.datasetVersion());
+        report.setReason(null);
+        report.setCategorySummaries(buildCategorySummaries(detailResults));
+        report.setComparison(comparison);
         double avgRetrievedContextChars = queryCount <= 0
                 ? 0D
                 : (double) totalRetrievedContextChars / queryCount;
-        lastReport.setAvgRetrievedContextChars(avgRetrievedContextChars);
-        lastReport.setAvgRetrievedContextTokens(Math.ceil(avgRetrievedContextChars / 4.0));
+        report.setAvgRetrievedContextChars(avgRetrievedContextChars);
+        report.setAvgRetrievedContextTokens(Math.ceil(avgRetrievedContextChars / 4.0));
 
-        addHistorySnapshot(currentSnapshot);
-        lastReport.setHistory(new ArrayList<>(reportHistory));
+        addHistorySnapshot(normalizedProfile, currentSnapshot);
+        report.setHistory(new ArrayList<>(reportHistory));
+        lastReports.put(normalizedProfile, report);
 
         if (comparison != null) {
-            log.info("RAG evaluation completed: Recall@{}={}%, Precision@{}={}%, MRR={}, Avg={}ms, P99={}ms, vs previous deltaRecall={}pp, deltaMRR={}",
-                    topK, String.format(Locale.ROOT, "%.1f", recallAtK),
+            log.info("RAG evaluation completed: profile={}, Recall@{}={}%, Precision@{}={}%, MRR={}, Avg={}ms, P99={}ms, vs previous deltaRecall={}pp, deltaMRR={}",
+                    normalizedProfile, topK, String.format(Locale.ROOT, "%.1f", recallAtK),
                     topK, String.format(Locale.ROOT, "%.1f", precisionAtK),
                     String.format(Locale.ROOT, "%.3f", mrr),
                     String.format(Locale.ROOT, "%.0f", avgLatency),
@@ -197,26 +267,43 @@ public class RagEvaluationService {
                     String.format(Locale.ROOT, "%.1f", comparison.getRecallAtKDelta()),
                     String.format(Locale.ROOT, "%.3f", comparison.getMrrDelta()));
         } else {
-            log.info("RAG evaluation completed: Recall@{}={}%, Precision@{}={}%, MRR={}, Avg={}ms, P99={}ms",
-                    topK, String.format(Locale.ROOT, "%.1f", recallAtK),
+            log.info("RAG evaluation completed: profile={}, Recall@{}={}%, Precision@{}={}%, MRR={}, Avg={}ms, P99={}ms",
+                    normalizedProfile, topK, String.format(Locale.ROOT, "%.1f", recallAtK),
                     topK, String.format(Locale.ROOT, "%.1f", precisionAtK),
                     String.format(Locale.ROOT, "%.3f", mrr),
                     String.format(Locale.ROOT, "%.0f", avgLatency),
                     String.format(Locale.ROOT, "%.0f", p99Latency));
         }
 
-        return lastReport;
+        return report;
     }
 
-    public EvaluationReport getLastReport() {
-        return lastReport;
+    public synchronized EvaluationReport getLastReport() {
+        return getLastReport(DEFAULT_PROFILE_NAME);
+    }
+
+    public synchronized EvaluationReport getLastReport(String profileName) {
+        return lastReports.get(normalizeProfile(profileName));
     }
 
     /**
-     * 获取测试用例列表
+     * 获取默认 profile 的测试用例列表。
      */
-    public List<TestCase> getTestCases() {
-        return testCases;
+    public synchronized List<TestCase> getTestCases() {
+        return getTestCases(DEFAULT_PROFILE_NAME);
+    }
+
+    public synchronized List<TestCase> getTestCases(String profileName) {
+        return List.copyOf(datasets.getOrDefault(normalizeProfile(profileName), List.of()));
+    }
+
+    public List<String> getAvailableProfiles() {
+        return List.copyOf(DATASET_DEFINITIONS.keySet());
+    }
+
+    public String getDatasetVersion(String profileName) {
+        DatasetDefinition definition = DATASET_DEFINITIONS.get(normalizeProfile(profileName));
+        return definition == null ? null : definition.datasetVersion();
     }
 
     private double computeP95(List<Double> values) {
@@ -313,11 +400,27 @@ public class RagEvaluationService {
         );
     }
 
-    private void addHistorySnapshot(EvaluationSnapshot snapshot) {
-        reportHistory.addLast(snapshot);
-        while (reportHistory.size() > MAX_HISTORY_SIZE) {
-            reportHistory.removeFirst();
+    private void addHistorySnapshot(String profileName, EvaluationSnapshot snapshot) {
+        Deque<EvaluationSnapshot> history = reportHistories.computeIfAbsent(
+                profileName, ignored -> new ArrayDeque<>());
+        history.addLast(snapshot);
+        while (history.size() > MAX_HISTORY_SIZE) {
+            history.removeFirst();
         }
+    }
+
+    private List<String> safeKeywords(TestCase testCase) {
+        if (testCase == null || testCase.getExpectedKeywords() == null) {
+            return List.of();
+        }
+        return testCase.getExpectedKeywords();
+    }
+
+    private String normalizeProfile(String profileName) {
+        if (profileName == null || profileName.isBlank()) {
+            return DEFAULT_PROFILE_NAME;
+        }
+        return profileName.trim();
     }
 
     private String normalizeCategory(String category) {
@@ -329,6 +432,9 @@ public class RagEvaluationService {
 
     private double round(double value) {
         return Math.round(value * 1000D) / 1000D;
+    }
+
+    private record DatasetDefinition(String resourceName, String datasetVersion) {
     }
 
     public static class TestCase {
@@ -372,6 +478,7 @@ public class RagEvaluationService {
         private List<EvaluationSnapshot> history;
         private String profileName;
         private String datasetVersion;
+        private String reason;
 
         public EvaluationReport() {}
 
@@ -398,6 +505,10 @@ public class RagEvaluationService {
         }
 
         public static EvaluationReport empty(String reason) {
+            return empty(DEFAULT_PROFILE_NAME, DEFAULT_DATASET_VERSION, reason);
+        }
+
+        public static EvaluationReport empty(String profileName, String datasetVersion, String reason) {
             EvaluationReport r = new EvaluationReport();
             r.timestamp = System.currentTimeMillis();
             r.queryCount = 0;
@@ -416,8 +527,9 @@ public class RagEvaluationService {
             r.categorySummaries = Collections.emptyList();
             r.comparison = null;
             r.history = Collections.emptyList();
-            r.profileName = DEFAULT_PROFILE_NAME;
-            r.datasetVersion = DEFAULT_DATASET_VERSION;
+            r.profileName = profileName;
+            r.datasetVersion = datasetVersion;
+            r.reason = reason;
             return r;
         }
 
@@ -442,6 +554,7 @@ public class RagEvaluationService {
         public List<EvaluationSnapshot> getHistory() { return history; }
         public String getProfileName() { return profileName; }
         public String getDatasetVersion() { return datasetVersion; }
+        public String getReason() { return reason; }
 
         public void setCategorySummaries(List<CategorySummary> categorySummaries) {
             this.categorySummaries = categorySummaries;
@@ -461,6 +574,10 @@ public class RagEvaluationService {
 
         public void setDatasetVersion(String datasetVersion) {
             this.datasetVersion = datasetVersion;
+        }
+
+        public void setReason(String reason) {
+            this.reason = reason;
         }
 
         public void setAvgRetrievedContextChars(double avgRetrievedContextChars) {
@@ -527,6 +644,7 @@ public class RagEvaluationService {
         private int queriesWithRelevantResult;
         private String profileName;
         private String datasetVersion;
+
 
         public EvaluationSnapshot() {}
 

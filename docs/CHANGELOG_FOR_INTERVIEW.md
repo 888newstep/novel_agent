@@ -132,6 +132,14 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - tradeoff: fixture results remain explicitly non-production evidence; live latency and throughput still require a reachable environment
 - evidence: `docs/BENCHMARK_REPORT.md`, `docs/WRITING_QUALITY_CASES.md`, `docs/METRICS_BASELINE.md`, `scripts/run-rag-evaluation.ps1`, and the 27-test Maven baseline
 
+### 2026-08-10 (corpus-aligned RAG evaluation profiles)
+
+- topic: semantic evaluation validity across production-like corpora
+- problem: the existing English fixture and the live Chinese corpus shared one history, so a profile switch could create a misleading comparison
+- change: added `writing-zh-live-v1` with 15 Chinese cases, profile-aware dataset loading, independent report history, explicit empty-report reasons, `/profiles` metadata, and `-Profile` support in `scripts/run-rag-evaluation.ps1`
+- result: the default `writing-default-v1` contract remains backward compatible; the new Chinese dataset loads in CI and the service/controller test suite reaches 31 passing tests
+- live validation: attempted on 2026-08-10 with `novelId=0` and `TopK=5`, but the configured Milvus TCP endpoint was unreachable during startup; no semantic metrics were claimed and no vectors were written
+- evidence: `src/main/resources/rag_eval_dataset_zh.json`, `src/main/java/com/novel/agent/service/RagEvaluationService.java`, `src/main/java/com/novel/agent/controller/RagEvaluationController.java`, and `docs/benchmarks/rag-evaluation-zh-live-20260810.json`
 ### 2026-08-10 (live Milvus validation and collection lifecycle hardening)
 
 - topic: real-environment retrieval reliability

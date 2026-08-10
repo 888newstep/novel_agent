@@ -40,6 +40,7 @@ Record the following in every round:
 | R0-CONTRACT | 2026-08-10 | 15 | metric aggregation fixture | 3 | 100% | 100% | 1.000 | not representative | not representative | not representative | emitted | n/a | CI contract: `RagEvaluationServiceTest` |
 | R1-FIXTURE | 2026-08-10 | 1 | continuation ranking | 1 | 100% after ranking | n/a | n/a | not measured | not measured | not measured | n/a | n/a | Top-1 relevant result: `0/1 -> 1/1` |
 | R0-LIVE-20260810 | 2026-08-10 | 15 | cloud Milvus operational run | 5 | 0%* | 0%* | 0.000* | 256.1ms | 692ms | 692ms | 563 | n/a | 15/15 queries returned 5 candidates; semantic score is not comparable* |
+| R1-ZH-PROFILE | 2026-08-10 | 15 | Chinese corpus-aligned profile implementation | 5 | pending | pending | pending | blocked | blocked | blocked | pending | n/a | `writing-zh-live-v1` loaded in CI; live run blocked by Milvus TCP reachability |
 
 `R0-CONTRACT` and `R1-FIXTURE` are deterministic CI evidence, not production latency claims. A live row must be recorded only after the embedding provider, Milvus instance, host, dataset, and parameters are written down.
 
@@ -51,6 +52,17 @@ Record the following in every round:
 - semantic caveat: the fixed evaluation cases use English keywords for a writing-memory fixture, while the live `novelId=0` corpus is an existing Chinese training-data collection. The `0%` recall/precision/MRR values are therefore marked `*` and must not be interpreted as an algorithm regression
 - reproducibility: run `scripts/run-rag-evaluation.ps1` against the same environment after loading a corpus aligned with `rag_eval_dataset.json`
 
+## Corpus-Aligned Chinese Profile
+
+### R1-ZH-PROFILE-20260810
+
+- profile: `writing-zh-live-v1`
+- dataset: `src/main/resources/rag_eval_dataset_zh.json`, version `2026-08-10`, 15 cases across the five writing scenarios
+- validity rule: expected keywords were selected from the observed Chinese production-like corpus; the old English fixture remains unchanged for CI contract comparisons
+- isolation rule: report history and comparison deltas are maintained per profile, so switching between English and Chinese datasets cannot create a false regression delta
+- implementation evidence: `RagEvaluationServiceTest`, `RagEvaluationControllerTest`, and `GET /api/v1/novel/evaluate/profiles`
+- live status: the 2026-08-10 attempt was blocked before query execution because the configured Milvus TCP endpoint was unreachable; semantic and latency fields are intentionally not reported
+- blocked-run evidence: `docs/benchmarks/rag-evaluation-zh-live-20260810.json`
 ## Import Throughput Baseline
 
 ### IMPORT-LIVE-20260810
@@ -103,10 +115,11 @@ pwsh -File scripts/run-rag-evaluation.ps1 `
   -BaseUrl http://localhost:8080 `
   -NovelId 0 `
   -TopK 5 `
+  -Profile writing-zh-live-v1 `
   -OutputPath artifacts/rag-report.json
 ```
 
-The command prints the stable profile, dataset version, recall metrics, latency percentiles, and retrieved-context size. It writes the complete response when `-OutputPath` is supplied. A live run requires a reachable MySQL database, Milvus collection, and configured embedding provider.
+The command prints the selected profile, dataset version, recall metrics, latency percentiles, and retrieved-context size. Use the default profile for the English CI fixture or `writing-zh-live-v1` for the Chinese production-like corpus. It writes the complete response when `-OutputPath` is supplied. A live run requires a reachable MySQL database, Milvus collection, and configured embedding provider.
 
 For import throughput, use a temporary positive `novelId` and clean it after the run:
 

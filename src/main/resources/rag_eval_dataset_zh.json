@@ -1,0 +1,77 @@
+[
+  {
+    "query": "大师兄 师父",
+    "expectedKeywords": ["大师兄", "师父"],
+    "category": "character_profile"
+  },
+  {
+    "query": "萧师兄",
+    "expectedKeywords": ["师兄"],
+    "category": "character_profile"
+  },
+  {
+    "query": "少宫主",
+    "expectedKeywords": ["少宫主"],
+    "category": "character_profile"
+  },
+  {
+    "query": "天极门 被灭宗",
+    "expectedKeywords": ["天极门", "灭宗"],
+    "category": "unresolved_event"
+  },
+  {
+    "query": "月影宗 宗门弟子",
+    "expectedKeywords": ["月影宗", "宗门弟子"],
+    "category": "unresolved_event"
+  },
+  {
+    "query": "火祖洞天 七狱塔",
+    "expectedKeywords": ["火祖洞天", "七狱塔"],
+    "category": "unresolved_event"
+  },
+  {
+    "query": "无空门 月影宗",
+    "expectedKeywords": ["无空门", "月影宗"],
+    "category": "world_setting"
+  },
+  {
+    "query": "黑皇城",
+    "expectedKeywords": ["黑皇城"],
+    "category": "world_setting"
+  },
+  {
+    "query": "楼兰古城 皇城大殿",
+    "expectedKeywords": ["楼兰古城", "皇城大殿"],
+    "category": "world_setting"
+  },
+  {
+    "query": "储物戒 异宝",
+    "expectedKeywords": ["储物戒", "异宝"],
+    "category": "item_skill"
+  },
+  {
+    "query": "符咒 符兽",
+    "expectedKeywords": ["符咒", "符兽"],
+    "category": "item_skill"
+  },
+  {
+    "query": "宝藏之地 24件异宝",
+    "expectedKeywords": ["宝藏之地", "异宝"],
+    "category": "item_skill"
+  },
+  {
+    "query": "黑皇城 少宫主",
+    "expectedKeywords": ["黑皇城", "少宫主"],
+    "category": "prewriting_context"
+  },
+  {
+    "query": "宗门弟子 修炼",
+    "expectedKeywords": ["宗门弟子", "修炼"],
+    "category": "prewriting_context"
+  },
+  {
+    "query": "火祖洞天 灵魂",
+    "expectedKeywords": ["火祖洞天", "灵魂"],
+    "category": "prewriting_context"
+  }
+]

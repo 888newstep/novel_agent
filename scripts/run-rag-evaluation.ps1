@@ -3,11 +3,14 @@ param(
     [long]$NovelId = 0,
     [ValidateRange(1, 50)]
     [int]$TopK = 5,
+    [ValidateNotNullOrEmpty()]
+    [string]$Profile = 'writing-default-v1',
     [string]$OutputPath
 )
 
 $BaseUrl = $BaseUrl.TrimEnd('/')
-$uri = '{0}/api/v1/novel/evaluate/segments?novelId={1}&topK={2}' -f $BaseUrl, $NovelId, $TopK
+$encodedProfile = [System.Uri]::EscapeDataString($Profile.Trim())
+$uri = '{0}/api/v1/novel/evaluate/segments?novelId={1}&topK={2}&profile={3}' -f $BaseUrl, $NovelId, $TopK, $encodedProfile
 
 try {
     $report = Invoke-RestMethod -Method Post -Uri $uri
@@ -19,6 +22,7 @@ try {
 $summary = [ordered]@{
     datasetVersion = $report.datasetVersion
     profileName = $report.profileName
+    reason = $report.reason
     queryCount = $report.queryCount
     topK = $report.topK
     recallAtK = $report.recallAtK

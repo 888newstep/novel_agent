@@ -115,6 +115,8 @@ The evaluation service and report model already support:
 - scenario count: 5
 - case count: 15
 - stable profile name: `writing-default-v1`
+- corpus-aligned profile: `writing-zh-live-v1` (dataset version `2026-08-10`, 15 Chinese cases)
+- live semantic status: pending a reachable Milvus endpoint; no Chinese quality number is promoted from the blocked run
 
 ### Live Operational Evidence
 
@@ -122,12 +124,14 @@ The evaluation service and report model already support:
 - environment: local MySQL + cloud Milvus + SiliconFlow `BAAI/bge-m3`
 - `TopK=5`, 15 queries, average latency `256.1ms`, `P95/P99=692ms`
 - average retrieved context: `2250` characters / `563` estimated tokens
-- semantic metrics are intentionally not promoted to the public quality baseline because the live corpus and fixed keyword labels are not aligned; see `docs/BENCHMARK_REPORT.md`
+- the legacy English semantic row remains non-comparable to the Chinese corpus; the aligned `writing-zh-live-v1` profile is implemented but its live quality number remains pending a reachable Milvus endpoint
 
 ### Evidence Files
 
 - `docs/BENCHMARK_REPORT.md`
 - `src/main/resources/rag_eval_dataset.json`
+- `src/main/resources/rag_eval_dataset_zh.json`
+- `docs/benchmarks/rag-evaluation-zh-live-20260810.json`
 - `src/test/resources/rag_eval_dataset.json`
 - `scripts/run-rag-evaluation.ps1`
 

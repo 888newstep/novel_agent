@@ -33,7 +33,7 @@ Story data -> structured knowledge -> chapter-aware retrieval
 4. Preview memory with `GET /api/v1/novel/{novelId}/memory`.
 5. Generate with `POST /api/v1/novel/{novelId}/generate`.
 6. Inspect `memoryLayers`, `consistencyCheck`, `generationTrace`, `postGenerationCheck`, and `degradationPolicy`.
-7. Run evaluation through `POST /api/v1/novel/evaluate/segments`.
+7. Run evaluation through `POST /api/v1/novel/evaluate/segments`; use `profile=writing-zh-live-v1` for the Chinese production-like corpus.
 8. Inspect cost scopes with `GET /api/admin/cost/summary`.
 
 See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walkthrough.
@@ -57,7 +57,7 @@ See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walk
 | Import stability | Streaming import, novel-scoped checkpoints, progress reporting, and idempotent retries | `src/main/java/com/novel/agent/service/DataImportService.java` |
 | Cost governance | Scoped budgets, degradation events, model fallback, and outline fallback | `src/main/java/com/novel/agent/service/TokenCostService.java` |
 | Dependency hygiene | Security-fixed transitive baselines, Dependabot, and PR dependency review | `docs/DEPENDENCY_SECURITY.md` |
-| Regression safety | 27 automated tests across service and controller layers | `docs/TEST_MATRIX.md` |
+| Regression safety | 31 automated tests across service and controller layers | `docs/TEST_MATRIX.md` |
 
 ## Tech Stack
 
@@ -141,7 +141,7 @@ The default application address is `http://localhost:8080`.
 | Training-data import | `POST /api/import/training-data` |
 | Isolated training-data import | `POST /api/import/training-data/{novelId}` |
 | Import progress | `GET /api/import/progress` |
-| RAG evaluation | `POST /api/v1/novel/evaluate/segments` |
+| RAG evaluation | `POST /api/v1/novel/evaluate/segments`; `GET /api/v1/novel/evaluate/profiles` |
 | Cost summary | `GET /api/admin/cost/summary` |
 | Cost dashboard | `GET /cost-panel` |
 
@@ -164,7 +164,7 @@ The default application address is `http://localhost:8080`.
 
 ## Verification Baseline
 
-The current repository includes 27 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, and controller APIs.
+The current repository includes 31 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, and controller APIs.
 
 ```powershell
 mvn test -DskipITs

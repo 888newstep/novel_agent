@@ -180,6 +180,7 @@ The P0/P1/P2 source-controlled plan is complete. The following items are intenti
 
 - [x] record an isolated live import throughput baseline without modifying the shared corpus
 - [x] record a deterministic token-cost before/after comparison using the existing governance service
-- [ ] align live RAG evaluation labels with the language and content of the production-like corpus before claiming semantic quality numbers
+- [x] add a corpus-aligned Chinese RAG evaluation profile and isolate its history from the English fixture
+- [ ] run the aligned Chinese profile against reachable Milvus and publish semantic quality numbers only after live validation
 - [ ] repeat the import benchmark at a larger scale on a pinned host specification before making capacity claims
 - [ ] decide whether long-term metrics should move from in-memory snapshots to persisted or Prometheus-backed history

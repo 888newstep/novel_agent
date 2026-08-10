@@ -11,7 +11,7 @@ It is intentionally written as a GitHub-facing engineering document instead of a
 
 - build entry: `mvn test -DskipITs`
 - latest verified status: pass
-- current automated test count: 27
+- current automated test count: 31
 - test types currently covered:
   - service-level unit tests
   - controller contract tests
@@ -22,7 +22,7 @@ It is intentionally written as a GitHub-facing engineering document instead of a
 
 | Area | What is verified | Evidence |
 |------|------------------|----------|
-| Retrieval evaluation | scenario-based evaluation report generation, stable comparison baseline, latency percentile fields | `src/test/java/com/novel/agent/service/RagEvaluationServiceTest.java` |
+| Retrieval evaluation | scenario-based evaluation report generation, profile isolation, explicit empty-report reasons, stable comparison baseline, latency percentile fields | `src/test/java/com/novel/agent/service/RagEvaluationServiceTest.java` |
 | Retrieval search | result merging, explanation output, chapter-aware filtering behavior, raw-score versus writing-default ranking case | `src/test/java/com/novel/agent/service/MilvusSearchServiceTest.java` |
 | Writing generation response | `memoryLayers`, `consistencyCheck`, `generationTrace`, `postGenerationCheck` response contract, warn-to-pass regression gate | `src/test/java/com/novel/agent/controller/NovelControllerTest.java` |
 | Budget degradation | budget block fallback to outline-only response | `src/test/java/com/novel/agent/controller/NovelControllerTest.java` |

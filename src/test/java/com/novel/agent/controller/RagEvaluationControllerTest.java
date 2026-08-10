@@ -13,6 +13,8 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -66,12 +68,50 @@ class RagEvaluationControllerTest {
     }
 
     @Test
+    void evaluatesSelectedProfileWithoutChangingDefaultContract() throws Exception {
+        RagEvaluationService.EvaluationReport report = RagEvaluationService.EvaluationReport.empty(
+                RagEvaluationService.CHINESE_LIVE_PROFILE_NAME,
+                "2026-08-10",
+                null);
+        report.setReason(null);
+        report.setCategorySummaries(List.of());
+        report.setHistory(List.of());
+
+        when(ragEvaluationService.evaluate(anyLong(), anyInt(),
+                eq(RagEvaluationService.CHINESE_LIVE_PROFILE_NAME))).thenReturn(report);
+
+        mockMvc.perform(post("/api/v1/novel/evaluate/segments")
+                        .param("novelId", "0")
+                        .param("topK", "5")
+                        .param("profile", RagEvaluationService.CHINESE_LIVE_PROFILE_NAME))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.profileName").value(RagEvaluationService.CHINESE_LIVE_PROFILE_NAME))
+                .andExpect(jsonPath("$.datasetVersion").value("2026-08-10"));
+    }
+
+    @Test
+    void returnsAvailableEvaluationProfiles() throws Exception {
+        when(ragEvaluationService.getAvailableProfiles()).thenReturn(List.of(
+                RagEvaluationService.DEFAULT_PROFILE_NAME,
+                RagEvaluationService.CHINESE_LIVE_PROFILE_NAME
+        ));
+        when(ragEvaluationService.getDatasetVersion(anyString())).thenReturn("2026-08-10");
+        when(ragEvaluationService.getTestCases(anyString())).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/novel/evaluate/profiles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(2))
+                .andExpect(jsonPath("$.profiles[1].profileName")
+                        .value(RagEvaluationService.CHINESE_LIVE_PROFILE_NAME));
+    }
+
+    @Test
     void returnsEmptyReportWhenNoEvaluationHasRun() throws Exception {
         when(ragEvaluationService.getLastReport()).thenReturn(null);
 
         mockMvc.perform(get("/api/v1/novel/evaluate/report"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.queryCount").value(0));
+                .andExpect(jsonPath("$.queryCount").value(0))
+                .andExpect(jsonPath("$.reason").value("No evaluation has been run yet"));
     }
 }
-
