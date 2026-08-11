@@ -1,0 +1,60 @@
+{
+  "snapshotId": "INFRA-PREFLIGHT-20260811",
+  "checkedAt": "2026-08-11T20:28:19+08:00",
+  "platform": "Windows 11 developer workstation",
+  "overallStatus": "PASS",
+  "applicationHealth": {
+    "status": "SKIPPED",
+    "reason": "application process was not running during the dependency-only preflight"
+  },
+  "requiredDependencies": [
+    {
+      "name": "mysql",
+      "location": "local",
+      "port": 3306,
+      "status": "PASS_NETWORK_REACHABILITY"
+    },
+    {
+      "name": "milvus",
+      "location": "cloud",
+      "port": 19530,
+      "status": "PASS_NETWORK_REACHABILITY"
+    },
+    {
+      "name": "embedding-provider",
+      "location": "cloud",
+      "endpoint": "https://api.siliconflow.cn/v1",
+      "observedHttpStatus": 404,
+      "status": "PASS_NETWORK_REACHABILITY"
+    }
+  ],
+  "optionalDependencies": [
+    {
+      "name": "redis",
+      "location": "local",
+      "port": 6379,
+      "status": "PASS_NETWORK_REACHABILITY",
+      "criticalPath": false
+    },
+    {
+      "name": "rabbitmq-amqp",
+      "location": "cloud",
+      "port": 5672,
+      "status": "PASS_NETWORK_REACHABILITY",
+      "criticalPath": false
+    },
+    {
+      "name": "rabbitmq-management",
+      "location": "cloud",
+      "port": 15672,
+      "status": "PASS_NETWORK_REACHABILITY",
+      "criticalPath": false
+    }
+  ],
+  "limitations": [
+    "TCP reachability does not prove MySQL authentication or schema readiness.",
+    "TCP reachability does not prove Milvus collection load/index state.",
+    "The embedding endpoint was checked without an API key; model authorization is validated by application-backed RAG/import calls.",
+    "Redis and RabbitMQ are available but are not used by the current import/retrieval critical path."
+  ]
+}

@@ -186,3 +186,4 @@ The P0/P1/P2 source-controlled plan is complete. The following items are intenti
 - [x] repeat the import benchmark on a pinned host specification and schema-aligned representative corpus; keep real-corpus and 50K capacity claims explicitly pending
 - [x] persist aggregate RAG evaluation snapshots in MySQL with an in-memory fallback and history API
 - [x] add Prometheus time-series export for operational dashboards after the MySQL history contract stabilizes
+- [x] add a credential-safe local/cloud infrastructure preflight and document the Redis/RabbitMQ non-critical-path boundary

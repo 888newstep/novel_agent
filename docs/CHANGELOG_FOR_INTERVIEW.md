@@ -19,6 +19,15 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 
 ## Current Recorded Rounds
 
+### 2026-08-11 (local/cloud environment preflight)
+
+- topic: open-source startup reproducibility and dependency-boundary clarity
+- problem: the repository documented MySQL and Milvus but did not provide a safe connectivity preflight; the benchmark table also retained a transient `pending/blocked` profile row after live evidence had been recorded separately
+- change: added `scripts/check-infrastructure.ps1` and `docs/ENVIRONMENT_RUNBOOK.md`; required checks cover MySQL, Milvus, and the embedding endpoint, while Redis and RabbitMQ are explicitly optional because they are not on the current import/retrieval critical path; corrected the stale profile row
+- result: a new clone can verify local/cloud reachability without printing credentials, and interview readers can distinguish network reachability from authentication, schema, and semantic validation
+- tradeoff: the preflight cannot prove MySQL credentials, Milvus collection readiness, embedding model authorization, or RabbitMQ/Redis business correctness; those remain application-backed checks
+- evidence: `scripts/check-infrastructure.ps1`, `docs/ENVIRONMENT_RUNBOOK.md`, `docs/benchmarks/infrastructure-preflight-live-20260811.json`, `README.md`, and `docs/BENCHMARK_REPORT.md`
+
 ### 2026-08-08
 
 - topic: repository structure and open-source baseline

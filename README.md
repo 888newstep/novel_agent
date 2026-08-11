@@ -86,6 +86,7 @@ sql/migrations/            Incremental database migrations
 src/main                   Application source and resources
 src/test                   Tests
 scripts/smoke-test.ps1      Local health and cost smoke check
+scripts/check-infrastructure.ps1  Local/cloud dependency connectivity preflight
 scripts/run-rag-evaluation.ps1  Reproducible API-backed RAG report
 scripts/run-import-benchmark.ps1  Isolated import throughput benchmark
 scripts/generate-representative-import-dataset.ps1  Deterministic benchmark corpus generator
@@ -102,6 +103,7 @@ docs/METRICS_BASELINE.md   Public metrics baseline and evidence status
 docs/COST_GOVERNANCE_CASE.md Cost-governance demo case
 docs/RAG_EVALUATION_HISTORY.md Aggregate evaluation history and restart behavior
 docs/OBSERVABILITY.md      Prometheus metrics and operational dashboard contract
+docs/ENVIRONMENT_RUNBOOK.md Local/cloud environment and preflight runbook
 ```
 
 ## Quick Start
@@ -125,7 +127,18 @@ Copy-Item .env.example .env
 
 Edit `.env` with local database, Milvus, model, and embedding settings. Secrets are intentionally not committed.
 
-### Verify and Run
+### Verify Infrastructure And Run
+
+Before starting the application, verify the local/cloud dependency boundary:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-infrastructure.ps1 `
+  -MilvusHost $env:MILVUS_HOST `
+  -RabbitMqHost $env:RABBITMQ_HOST `
+  -OutputPath artifacts/infrastructure-preflight.json
+```
+
+The script requires MySQL, Milvus, and the embedding provider for the RAG/import path. Redis and RabbitMQ are reported as optional because they are not current critical-path dependencies.
 
 ```powershell
 mvn test -DskipITs
@@ -192,6 +205,7 @@ For an environment-backed retrieval report, run `scripts/run-rag-evaluation.ps1`
 
 - A pinned Win11 host baseline for 1,000 schema-aligned Chinese writing-memory records is recorded in `docs/BENCHMARK_REPORT.md`; it is not a 50K production capacity claim.
 - A production capacity claim still requires a representative real corpus and the target deployment host specification.
+- The infrastructure preflight checks network reachability only; MySQL authentication/schema and provider model behavior still require application-backed validation.
 - Exact provider-side token usage depends on whether the upstream model API returns usage metadata.
 - Outline-only degradation preserves product usability but is not a substitute for full literary generation.
 - Generic agent orchestration remains outside this repository by design.
