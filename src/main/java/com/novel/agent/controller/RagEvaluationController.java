@@ -43,13 +43,12 @@ public class RagEvaluationController {
 
     @GetMapping("/report")
     public ResponseEntity<RagEvaluationService.EvaluationReport> getLastReport(
+            @RequestParam(defaultValue = "0") Long novelId,
             @RequestParam(defaultValue = RagEvaluationService.DEFAULT_PROFILE_NAME) String profile) {
         String normalizedProfile = normalizeProfile(profile);
-        log.info("RAG last report requested, profile={}", normalizedProfile);
+        log.info("RAG last report requested, novelId={}, profile={}", novelId, normalizedProfile);
         RagEvaluationService.EvaluationReport report =
-                RagEvaluationService.DEFAULT_PROFILE_NAME.equals(normalizedProfile)
-                        ? ragEvaluationService.getLastReport()
-                        : ragEvaluationService.getLastReport(normalizedProfile);
+                ragEvaluationService.getLastReport(novelId, normalizedProfile);
         if (report == null) {
             return ResponseEntity.ok(RagEvaluationService.EvaluationReport.empty(
                     normalizedProfile,
@@ -57,6 +56,26 @@ public class RagEvaluationController {
                     "No evaluation has been run yet"));
         }
         return ResponseEntity.ok(report);
+    }
+
+    @GetMapping("/history")
+    public ResponseEntity<?> getEvaluationHistory(
+            @RequestParam(defaultValue = "0") Long novelId,
+            @RequestParam(defaultValue = RagEvaluationService.DEFAULT_PROFILE_NAME) String profile,
+            @RequestParam(defaultValue = "5") int limit) {
+        String normalizedProfile = normalizeProfile(profile);
+        List<RagEvaluationService.EvaluationSnapshot> history =
+                ragEvaluationService.getHistory(novelId, normalizedProfile, limit);
+        log.info("RAG evaluation history requested, novelId={}, profile={}, limit={}, count={}",
+                novelId, normalizedProfile, limit, history.size());
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("novelId", novelId);
+        response.put("profileName", normalizedProfile);
+        response.put("datasetVersion", ragEvaluationService.getDatasetVersion(normalizedProfile));
+        response.put("count", history.size());
+        response.put("history", history);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/test-cases")

@@ -1,0 +1,36 @@
+{
+  "benchmarkId": "IMPORT-LIVE-20260810-LARGE",
+  "date": "2026-08-10",
+  "inputFormat": "json_lines",
+  "sourceRecordCount": 600,
+  "importedRecordCount": 600,
+  "segmentCount": 1200,
+  "serviceDurationMs": 37853,
+  "wallClockDurationMs": 39223,
+  "recordsPerSecond": 15.85,
+  "segmentsPerSecond": 31.7,
+  "batchCount": 67,
+  "flushCount": 3,
+  "retryCount": 0,
+  "failureCount": 0,
+  "checkpointExistsAfterCompletion": false,
+  "cleanupSucceeded": true,
+  "environment": {
+    "mysql": "local",
+    "milvus": "cloud",
+    "embeddingProvider": "configured cloud provider",
+    "batchSize": 18,
+    "maxRetries": 3,
+    "retryBackoffMs": 1000
+  },
+  "isolation": {
+    "mode": "temporary positive novelId",
+    "sharedNovelIdModified": false,
+    "temporaryNovelVectorsRemoved": true
+  },
+  "caveats": [
+    "This is a 600-record operational sample, not a 50K-record capacity extrapolation.",
+    "The sample was generated from the existing JSONL import contract and removed after cleanup.",
+    "The public snapshot intentionally omits the temporary novelId and local file path."
+  ]
+}

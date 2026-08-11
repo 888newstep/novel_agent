@@ -41,6 +41,9 @@ Record the following in every round:
 | R1-FIXTURE | 2026-08-10 | 1 | continuation ranking | 1 | 100% after ranking | n/a | n/a | not measured | not measured | not measured | n/a | n/a | Top-1 relevant result: `0/1 -> 1/1` |
 | R0-LIVE-20260810 | 2026-08-10 | 15 | cloud Milvus operational run | 5 | 0%* | 0%* | 0.000* | 256.1ms | 692ms | 692ms | 563 | n/a | 15/15 queries returned 5 candidates; semantic score is not comparable* |
 | R1-ZH-PROFILE | 2026-08-10 | 15 | Chinese corpus-aligned profile implementation | 5 | pending | pending | pending | blocked | blocked | blocked | pending | n/a | `writing-zh-live-v1` loaded in CI; live run blocked by Milvus TCP reachability |
+| R1-ZH-LIVE-20260810 | 2026-08-10 | 15 | Chinese corpus-aligned live retrieval | 5 | 73.3% | 39.6% | 0.689 | 111.6ms | 240ms | 240ms | 563 | n/a | Mean of 3 sequential read-only runs; first run cold-started; no vectors written |
+| R1-HISTORY-SMOKE-20260810 | 2026-08-10 | 15 | aggregate persistence and restart smoke | 5 | 80.0% | 41.3% | 0.756 | 307.7ms | 887ms | 887ms | not recorded | n/a | One read-only run; one MySQL snapshot row; report/history restored after restart; details absent |
+| IMPORT-LIVE-20260810-LARGE | 2026-08-10 | 600 | isolated JSONL import | n/a | n/a | n/a | n/a | 38.0s | n/a | n/a | n/a | n/a | 1200 segments, 15.85 records/s, 31.7 segments/s, 0 retries, cleanup succeeded |
 
 `R0-CONTRACT` and `R1-FIXTURE` are deterministic CI evidence, not production latency claims. A live row must be recorded only after the embedding provider, Milvus instance, host, dataset, and parameters are written down.
 
@@ -61,8 +64,26 @@ Record the following in every round:
 - validity rule: expected keywords were selected from the observed Chinese production-like corpus; the old English fixture remains unchanged for CI contract comparisons
 - isolation rule: report history and comparison deltas are maintained per profile, so switching between English and Chinese datasets cannot create a false regression delta
 - implementation evidence: `RagEvaluationServiceTest`, `RagEvaluationControllerTest`, and `GET /api/v1/novel/evaluate/profiles`
-- live status: the 2026-08-10 attempt was blocked before query execution because the configured Milvus TCP endpoint was unreachable; semantic and latency fields are intentionally not reported
-- blocked-run evidence: `docs/benchmarks/rag-evaluation-zh-live-20260810.json`
+- live status: verified on 2026-08-10 after the Milvus endpoint recovered; three sequential read-only evaluations completed against `novelId=0`
+- aggregate result: Recall@5 was stable at `73.3%`; Precision@5 ranged from `38.7%` to `40.0%` with a three-run mean of `39.6%`; MRR ranged from `0.667` to `0.700` with a mean of `0.689`
+- latency result: three-run mean was `111.6ms`, mean `P95=240ms`, and mean `P99=240ms`; the first cold run was `210.3ms` average / `567ms` P95, while warmed runs were `63.8ms` and `60.7ms` average
+- scenario signal: `item_skill` and `world_setting` reached `100%` Recall@5 in the representative run; `unresolved_event` was the weakest bucket at `33.3%` Recall@5 and `0.333` MRR
+- next tuning samples: `少宫主`, `天极门 被灭宗`, `火祖洞天 七狱塔`, and `黑皇城 少宫主` were not matched in the representative Top-5 results; keep them as hard cases instead of weakening labels
+- safety: the run only searched `novelId=0`; no vectors were written
+- live-run evidence: `docs/benchmarks/rag-evaluation-zh-live-20260810.json`
+
+## RAG Evaluation History Persistence Smoke
+
+### R1-HISTORY-SMOKE-20260810
+
+- environment: local MySQL, cloud Milvus, and configured cloud embedding provider
+- parameters: profile `writing-zh-live-v1`, dataset version `2026-08-10`, `novelId=0`, `TopK=5`, 15 queries
+- evaluation result: Recall@5 `80.0%`, Precision@5 `41.3333%`, MRR `0.7556`, average latency `307.733ms`, `P95=887ms`, `P99=887ms`
+- persistence result: one aggregate row was written to `rag_evaluation_snapshots`; after an application restart, `/report` restored `queryCount=15` and `/history` returned `count=1`
+- privacy result: the persisted history response did not contain `details`, and the table stores no query text, retrieved content, or novel source text
+- comparison caveat: this is a single persistence smoke run and is not a replacement for the three-run `R1-ZH-LIVE-20260810` latency baseline
+- evidence: `docs/benchmarks/rag-evaluation-history-live-20260810.json`, `docs/RAG_EVALUATION_HISTORY.md`, and the service/controller persistence tests
+
 ## Import Throughput Baseline
 
 ### IMPORT-LIVE-20260810
@@ -89,6 +110,31 @@ Record the following in every round:
 - scope: a 60-record operational sample; this is not a 50K capacity extrapolation
 - evidence: `scripts/run-import-benchmark.ps1` and the committed snapshot `docs/benchmarks/import-benchmark-live-20260810.json`
 - decision: keep the `novelId`-isolated benchmark path and repeat with a larger dataset before making capacity claims
+
+### IMPORT-LIVE-20260810-LARGE
+
+| Field | Value |
+|------|-------|
+| Input format | JSON lines |
+| Source records | 600 |
+| Imported records | 600 |
+| Stored segments | 1200 |
+| Service duration | `37.853s` |
+| Wall-clock duration | `39.223s` |
+| Records per second | `15.85` |
+| Segments per second | `31.7` |
+| Batch count | 67 |
+| Flush count | 3 |
+| Retry count | 0 |
+| Failure count | 0 |
+| Checkpoint after completion | removed |
+| Isolation | temporary positive `novelId`, cleaned from all Milvus collections |
+
+- environment: local MySQL, cloud Milvus, and configured cloud embedding provider
+- scope: 600-record operational sample; this improves evidence over the 60-record baseline but is still not a 50K capacity extrapolation
+- evidence: `scripts/run-import-benchmark.ps1` and `docs/benchmarks/import-benchmark-large-live-20260810.json`
+- result: throughput increased from `7.34` to `15.85` records/s and from `14.68` to `31.7` segments/s; both runs completed with zero retries and zero failures
+- caveat: the sample used generated content conforming to the existing JSONL contract; representative corpus and pinned host specifications are still required before capacity claims
 
 ## Token Cost Governance Baseline
 
@@ -119,7 +165,7 @@ pwsh -File scripts/run-rag-evaluation.ps1 `
   -OutputPath artifacts/rag-report.json
 ```
 
-The command prints the selected profile, dataset version, recall metrics, latency percentiles, and retrieved-context size. Use the default profile for the English CI fixture or `writing-zh-live-v1` for the Chinese production-like corpus. It writes the complete response when `-OutputPath` is supplied. A live run requires a reachable MySQL database, Milvus collection, and configured embedding provider.
+The command prints the selected profile, dataset version, recall metrics, latency percentiles, and retrieved-context size. Use the default profile for the English CI fixture or `writing-zh-live-v1` for the Chinese production-like corpus. The committed live snapshot reports three sequential runs so cold-start and warmed-process latency are not conflated. It writes the complete response when `-OutputPath` is supplied. A live run requires a reachable MySQL database, Milvus collection, and configured embedding provider.
 
 For import throughput, use a temporary positive `novelId` and clean it after the run:
 

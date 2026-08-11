@@ -1,10 +1,14 @@
 package com.novel.agent.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.novel.agent.entity.RagEvaluationSnapshot;
+import com.novel.agent.repository.RagEvaluationSnapshotRepository;
+import org.springframework.data.domain.Pageable;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -16,8 +20,12 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.ArgumentCaptor;
 
 class RagEvaluationServiceTest {
 
@@ -115,5 +123,98 @@ class RagEvaluationServiceTest {
         assertEquals(0, report.getQueryCount());
         assertTrue(report.getHistory().isEmpty());
         assertTrue(report.getReason().contains("Unknown evaluation profile"));
+    }
+
+    @Test
+    void persistsAggregateSnapshotWithoutQueryDetails() {
+        MilvusSearchService milvusSearchService = mock(MilvusSearchService.class);
+        RagEvaluationSnapshotRepository repository = mock(RagEvaluationSnapshotRepository.class);
+        when(repository.findAllByOrderByEvaluatedAtDesc(any(Pageable.class))).thenReturn(List.of());
+        when(milvusSearchService.searchSegments(anyLong(), anyString(), anyInt()))
+                .thenAnswer(invocation -> List.of(Map.of(
+                        "content", invocation.getArgument(1, String.class),
+                        "score", 0.99
+                )));
+
+        RagEvaluationService service = new RagEvaluationService(
+                milvusSearchService, new ObjectMapper(), repository);
+        service.init();
+        RagEvaluationService.EvaluationReport report = service.evaluate(
+                9L, 3, RagEvaluationService.CHINESE_LIVE_PROFILE_NAME);
+
+        ArgumentCaptor<RagEvaluationSnapshot> captor = ArgumentCaptor.forClass(RagEvaluationSnapshot.class);
+        verify(repository).save(captor.capture());
+        RagEvaluationSnapshot snapshot = captor.getValue();
+        assertEquals(9L, snapshot.getNovelId());
+        assertEquals(report.getProfileName(), snapshot.getProfileName());
+        assertEquals(report.getDatasetVersion(), snapshot.getDatasetVersion());
+        assertEquals(report.getQueryCount(), snapshot.getQueryCount());
+        assertEquals(report.getRecallAtK(), snapshot.getRecallAtK(), 0.0001);
+        assertEquals(report.getAvgRetrievedContextChars(), snapshot.getAvgContextChars(), 0.0001);
+        assertNotNull(report.getDetails());
+    }
+
+    @Test
+    void databasePersistenceFailureDoesNotBlockEvaluation() {
+        MilvusSearchService milvusSearchService = mock(MilvusSearchService.class);
+        RagEvaluationSnapshotRepository repository = mock(RagEvaluationSnapshotRepository.class);
+        when(repository.findAllByOrderByEvaluatedAtDesc(any(Pageable.class))).thenReturn(List.of());
+        doThrow(new RuntimeException("database unavailable"))
+                .when(repository).save(any(RagEvaluationSnapshot.class));
+        when(milvusSearchService.searchSegments(anyLong(), anyString(), anyInt()))
+                .thenAnswer(invocation -> List.of(Map.of(
+                        "content", invocation.getArgument(1, String.class),
+                        "score", 0.99
+                )));
+
+        RagEvaluationService service = new RagEvaluationService(
+                milvusSearchService, new ObjectMapper(), repository);
+        service.init();
+
+        RagEvaluationService.EvaluationReport report = service.evaluate(0L, 3);
+
+        assertEquals(15, report.getQueryCount());
+        assertEquals(100.0, report.getRecallAtK(), 0.0001);
+    }
+
+    @Test
+    void restoresLatestAggregateSnapshotAfterServiceRestart() {
+        MilvusSearchService milvusSearchService = mock(MilvusSearchService.class);
+        RagEvaluationSnapshotRepository repository = mock(RagEvaluationSnapshotRepository.class);
+        RagEvaluationSnapshot persisted = RagEvaluationSnapshot.builder()
+                .profileName(RagEvaluationService.CHINESE_LIVE_PROFILE_NAME)
+                .datasetVersion("2026-08-10")
+                .novelId(0L)
+                .topK(5)
+                .queryCount(15)
+                .queriesWithRelevantResult(11)
+                .recallAtK(73.33)
+                .precisionAtK(39.56)
+                .mrr(0.689)
+                .avgLatencyMs(111.6)
+                .p95LatencyMs(240.0)
+                .p99LatencyMs(240.0)
+                .minLatencyMs(90.0)
+                .maxLatencyMs(260.0)
+                .keywordCoverage(80.0)
+                .avgContextChars(480.0)
+                .avgContextTokens(120.0)
+                .evaluatedAt(123L)
+                .build();
+        when(repository.findAllByOrderByEvaluatedAtDesc(any(Pageable.class)))
+                .thenReturn(List.of(persisted));
+
+        RagEvaluationService service = new RagEvaluationService(
+                milvusSearchService, new ObjectMapper(), repository);
+        service.init();
+
+        RagEvaluationService.EvaluationReport report = service.getLastReport(
+                0L, RagEvaluationService.CHINESE_LIVE_PROFILE_NAME);
+
+        assertNotNull(report);
+        assertEquals(73.33, report.getRecallAtK(), 0.0001);
+        assertEquals(39.56, report.getPrecisionAtK(), 0.0001);
+        assertEquals(0, report.getDetails().size());
+        assertEquals(1, report.getHistory().size());
     }
 }

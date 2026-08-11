@@ -34,7 +34,8 @@ Story data -> structured knowledge -> chapter-aware retrieval
 5. Generate with `POST /api/v1/novel/{novelId}/generate`.
 6. Inspect `memoryLayers`, `consistencyCheck`, `generationTrace`, `postGenerationCheck`, and `degradationPolicy`.
 7. Run evaluation through `POST /api/v1/novel/evaluate/segments`; use `profile=writing-zh-live-v1` for the Chinese production-like corpus.
-8. Inspect cost scopes with `GET /api/admin/cost/summary`.
+8. Inspect persisted aggregate history with `GET /api/v1/novel/evaluate/history?novelId=0&profile=writing-zh-live-v1`.
+9. Inspect cost scopes with `GET /api/admin/cost/summary`.
 
 See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walkthrough.
 
@@ -56,8 +57,9 @@ See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walk
 | Generation control | Layered memory, consistency warnings, trace output, and post-generation checks | `src/main/java/com/novel/agent/controller/NovelController.java` |
 | Import stability | Streaming import, novel-scoped checkpoints, progress reporting, and idempotent retries | `src/main/java/com/novel/agent/service/DataImportService.java` |
 | Cost governance | Scoped budgets, degradation events, model fallback, and outline fallback | `src/main/java/com/novel/agent/service/TokenCostService.java` |
+| Evaluation history | MySQL aggregate snapshots with in-memory fallback; query details and novel text are not persisted | `src/main/java/com/novel/agent/service/RagEvaluationService.java` |
 | Dependency hygiene | Security-fixed transitive baselines, Dependabot, and PR dependency review | `docs/DEPENDENCY_SECURITY.md` |
-| Regression safety | 31 automated tests across service and controller layers | `docs/TEST_MATRIX.md` |
+| Regression safety | 35 automated service and controller contract tests | `docs/TEST_MATRIX.md` |
 
 ## Tech Stack
 
@@ -77,6 +79,7 @@ See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walk
 .env.example               Local environment template
 pom.xml                    Maven project definition
 sql/init.sql               Database bootstrap script
+sql/migrations/            Incremental database migrations
 src/main                   Application source and resources
 src/test                   Tests
 scripts/smoke-test.ps1      Local health and cost smoke check
@@ -92,6 +95,7 @@ docs/ARCHITECTURE.md       Repository structure notes
 docs/TEST_MATRIX.md        Automated verification matrix
 docs/METRICS_BASELINE.md   Public metrics baseline and evidence status
 docs/COST_GOVERNANCE_CASE.md Cost-governance demo case
+docs/RAG_EVALUATION_HISTORY.md Aggregate evaluation history and restart behavior
 ```
 
 ## Quick Start
@@ -142,6 +146,7 @@ The default application address is `http://localhost:8080`.
 | Isolated training-data import | `POST /api/import/training-data/{novelId}` |
 | Import progress | `GET /api/import/progress` |
 | RAG evaluation | `POST /api/v1/novel/evaluate/segments`; `GET /api/v1/novel/evaluate/profiles` |
+| RAG report/history | `GET /api/v1/novel/evaluate/report`; `GET /api/v1/novel/evaluate/history` |
 | Cost summary | `GET /api/admin/cost/summary` |
 | Cost dashboard | `GET /cost-panel` |
 
@@ -158,13 +163,14 @@ The default application address is `http://localhost:8080`.
 - `docs/TEST_MATRIX.md`
 - `docs/METRICS_BASELINE.md`
 - `docs/COST_GOVERNANCE_CASE.md`
+- `docs/RAG_EVALUATION_HISTORY.md`
 - `docs/DEPENDENCY_SECURITY.md`
 - `CONTRIBUTING.md`
 - `SECURITY.md`
 
 ## Verification Baseline
 
-The current repository includes 31 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, and controller APIs.
+The current repository includes 35 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, evaluation history, and controller APIs.
 
 ```powershell
 mvn test -DskipITs
@@ -172,11 +178,11 @@ mvn test -DskipITs
 
 See [`docs/TEST_MATRIX.md`](docs/TEST_MATRIX.md) for the exact test scope and environment-dependent gaps.
 
-For an environment-backed retrieval report, run `scripts/run-rag-evaluation.ps1` after MySQL, Milvus, and the embedding provider are available.
+For an environment-backed retrieval report, run `scripts/run-rag-evaluation.ps1` after MySQL, Milvus, and the embedding provider are available. Evaluation writes only aggregate metrics to MySQL; `GET /api/v1/novel/evaluate/history` can read them after an application restart.
 
 ## Current Limitations
 
-- Real Milvus throughput and cloud retrieval latency still require an environment-backed benchmark run.
+- Larger Milvus throughput and capacity claims still require an environment-backed benchmark run; the 15-query Chinese retrieval baseline is recorded in `docs/BENCHMARK_REPORT.md`.
 - Exact provider-side token usage depends on whether the upstream model API returns usage metadata.
 - Outline-only degradation preserves product usability but is not a substitute for full literary generation.
 - Generic agent orchestration remains outside this repository by design.

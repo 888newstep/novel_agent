@@ -21,6 +21,7 @@ Use the following labels consistently:
 | Evaluation dataset size | Verified | 15 writing-specific cases | `src/main/resources/rag_eval_dataset.json` |
 | Evaluation profile | Verified | `writing-default-v1` | `src/main/java/com/novel/agent/service/RagEvaluationService.java` |
 | Retrieval metrics emitted | Verified | `Recall@K`, `Precision@K`, `MRR`, `Avg`, `P95`, `P99`, context chars/tokens | `src/main/java/com/novel/agent/service/RagEvaluationService.java` |
+| Evaluation history persistence | Verified | MySQL aggregate snapshots keyed by `profile_name + novel_id`, with in-memory fallback; query details and novel text excluded | `src/main/java/com/novel/agent/entity/RagEvaluationSnapshot.java`, `sql/migrations/V20260810__add_rag_evaluation_snapshots.sql` |
 | Import retry budget | Verified | `max-retries=3`, `retry-backoff-ms=1000` | `src/main/resources/application.yml` |
 | Import batch size | Verified | `18` | `src/main/resources/application.yml` |
 | Cost-governance scopes | Verified | per request, per novel, per model, daily, monthly | `src/main/java/com/novel/agent/service/TokenCostService.java` |
@@ -56,15 +57,24 @@ Use the following labels consistently:
 
 ### Public Benchmark Status
 
-- current public throughput number: verified on 2026-08-10 with a small isolated live run
-- latest live sample: 60 JSONL records -> 120 segments in `8.176s` service time
-- latest throughput: `7.34 records/s` and `14.68 segments/s`
-- latest reliability counters: `0` retries, `1` flush, `0` failures, checkpoint removed
-- benchmark environment required for next update:
+- current public throughput number: verified on 2026-08-10 with isolated live runs at two sample sizes
+- latest live sample: 600 JSONL records -> 1200 segments in `37.853s` service time
+- latest throughput: `15.85 records/s` and `31.7 segments/s`
+- latest reliability counters: `0` retries, `3` flushes, `0` failures, checkpoint removed
+- benchmark environment required for the next capacity claim:
   - active embedding provider
   - reachable Milvus instance
   - representative training dataset
   - stable host specification
+
+### Latest Larger Operational Run
+
+- sample: 600 JSONL records -> 1200 segments
+- service duration: `37.853s`; wall-clock duration: `39.223s`
+- throughput: `15.85 records/s`; `31.7 segments/s`
+- reliability: `0` retries, `0` failures, cleanup succeeded
+- evidence: `docs/benchmarks/import-benchmark-large-live-20260810.json`
+- interpretation: operational evidence only; do not extrapolate linearly to 50K records
 
 ### Next Scale Run To Capture
 
@@ -91,7 +101,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-import-benchmark
   -Cleanup
 ```
 
-The 2026-08-10 sample is an operational baseline, not a 50K-record capacity claim. A larger run should preserve the same fields and record host, embedding model, dataset size, and cleanup id.
+The 2026-08-10 samples are operational baselines, not a 50K-record capacity claim. A larger run should preserve the same fields and record host, embedding model, dataset size, and cleanup id.
 
 ## Retrieval Metrics
 
@@ -108,6 +118,8 @@ The evaluation service and report model already support:
 - average retrieved context characters and estimated tokens
 - profile comparison
 - category breakdown by writing scenario
+- MySQL-backed aggregate history and restart restoration
+- history API: `GET /api/v1/novel/evaluate/history`
 
 ### Current Public Baseline
 
@@ -116,7 +128,7 @@ The evaluation service and report model already support:
 - case count: 15
 - stable profile name: `writing-default-v1`
 - corpus-aligned profile: `writing-zh-live-v1` (dataset version `2026-08-10`, 15 Chinese cases)
-- live semantic status: pending a reachable Milvus endpoint; no Chinese quality number is promoted from the blocked run
+- live semantic status: verified on 2026-08-10 with three sequential read-only runs; use the committed range/mean snapshot rather than a single cold-start call
 
 ### Live Operational Evidence
 
@@ -124,8 +136,18 @@ The evaluation service and report model already support:
 - environment: local MySQL + cloud Milvus + SiliconFlow `BAAI/bge-m3`
 - `TopK=5`, 15 queries, average latency `256.1ms`, `P95/P99=692ms`
 - average retrieved context: `2250` characters / `563` estimated tokens
-- the legacy English semantic row remains non-comparable to the Chinese corpus; the aligned `writing-zh-live-v1` profile is implemented but its live quality number remains pending a reachable Milvus endpoint
+- the legacy English semantic row remains non-comparable to the Chinese corpus; the aligned `writing-zh-live-v1` profile now has a separate verified baseline
 
+
+### Corpus-Aligned Chinese Profile Evidence
+
+- profile: `writing-zh-live-v1`, dataset version `2026-08-10`, `novelId=0`, `TopK=5`
+- sample: 15 queries repeated three times against reachable cloud Milvus; no vectors were written
+- quality: Recall@5 `73.3%` in all three runs; Precision@5 `38.7%–40.0%` (mean `39.6%`); MRR `0.667–0.700` (mean `0.689`); keyword coverage `63.0%`
+- latency: average `60.7–210.3ms`; P95 `73–567ms`; P99 `73–567ms`; first run is cold-started and later runs are warmed
+- scenario signal: `item_skill` and `world_setting` are strongest in the representative run; `unresolved_event` is the next ranking-tuning target
+- hard cases: `少宫主`, `天极门 被灭宗`, `火祖洞天 七狱塔`, and `黑皇城 少宫主`
+- evidence: `docs/benchmarks/rag-evaluation-zh-live-20260810.json`
 ### Evidence Files
 
 - `docs/BENCHMARK_REPORT.md`
@@ -134,6 +156,8 @@ The evaluation service and report model already support:
 - `docs/benchmarks/rag-evaluation-zh-live-20260810.json`
 - `src/test/resources/rag_eval_dataset.json`
 - `scripts/run-rag-evaluation.ps1`
+- `src/main/java/com/novel/agent/controller/RagEvaluationController.java`
+- `src/test/java/com/novel/agent/service/RagEvaluationServiceTest.java`
 
 ## Token Cost Metrics
 

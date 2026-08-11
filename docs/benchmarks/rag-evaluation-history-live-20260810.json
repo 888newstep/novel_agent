@@ -1,0 +1,48 @@
+{
+  "runId": "R1-HISTORY-SMOKE-20260810",
+  "status": "verified",
+  "runDate": "2026-08-10",
+  "profileName": "writing-zh-live-v1",
+  "datasetVersion": "2026-08-10",
+  "novelId": 0,
+  "topK": 5,
+  "queryCount": 15,
+  "environment": {
+    "mysql": "local_configured_and_connected",
+    "milvus": "cloud_configured_and_reachable",
+    "embeddingProvider": "cloud_configured_and_used"
+  },
+  "aggregate": {
+    "recallAtK": 80.0,
+    "precisionAtK": 41.333333333333336,
+    "mrr": 0.7555555555555555,
+    "avgLatencyMs": 307.73333333333334,
+    "p95LatencyMs": 887.0,
+    "p99LatencyMs": 887.0
+  },
+  "persistenceVerification": {
+    "table": "rag_evaluation_snapshots",
+    "rowsWritten": 1,
+    "applicationRestarted": true,
+    "reportAfterRestart": {
+      "queryCount": 15,
+      "detailsPresent": false
+    },
+    "historyAfterRestart": {
+      "count": 1,
+      "profileName": "writing-zh-live-v1",
+      "novelId": 0
+    }
+  },
+  "safety": {
+    "vectorsWritten": false,
+    "queryDetailsPersisted": false,
+    "novelSourceTextPersisted": false
+  },
+  "notes": [
+    "This is one read-only evaluation used to verify aggregate persistence and restart restoration.",
+    "The result is not a replacement for the three-run Chinese retrieval latency baseline.",
+    "The snapshot intentionally records scalar metrics only and excludes query details and novel text.",
+    "Pinned-host large-scale capacity measurement remains pending."
+  ]
+}

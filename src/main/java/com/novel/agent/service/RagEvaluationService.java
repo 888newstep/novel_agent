@@ -2,10 +2,13 @@ package com.novel.agent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.novel.agent.entity.RagEvaluationSnapshot;
+import com.novel.agent.repository.RagEvaluationSnapshotRepository;
 import jakarta.annotation.PostConstruct;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -28,11 +31,11 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class RagEvaluationService {
 
     private final MilvusSearchService milvusSearchService;
     private final ObjectMapper objectMapper;
+    private final RagEvaluationSnapshotRepository snapshotRepository;
 
     /** 默认评测 profile，保持既有 API 和 CI fixture 的兼容性。 */
     public static final String DEFAULT_PROFILE_NAME = "writing-default-v1";
@@ -41,6 +44,7 @@ public class RagEvaluationService {
     public static final String CHINESE_LIVE_PROFILE_NAME = "writing-zh-live-v1";
 
     private static final int MAX_HISTORY_SIZE = 5;
+    private static final int MAX_HISTORY_QUERY_LIMIT = 50;
     private static final String DEFAULT_DATASET_VERSION = "2026-08-09";
     private static final String CHINESE_LIVE_DATASET_VERSION = "2026-08-10";
     private static final Map<String, DatasetDefinition> DATASET_DEFINITIONS = createDatasetDefinitions();
@@ -52,6 +56,20 @@ public class RagEvaluationService {
     private final Map<String, List<TestCase>> datasets = new LinkedHashMap<>();
     private final Map<String, Deque<EvaluationSnapshot>> reportHistories = new LinkedHashMap<>();
     private final Map<String, EvaluationReport> lastReports = new LinkedHashMap<>();
+
+    /** 保留无数据库单元测试和脚本场景的轻量构造方式。 */
+    public RagEvaluationService(MilvusSearchService milvusSearchService, ObjectMapper objectMapper) {
+        this(milvusSearchService, objectMapper, null);
+    }
+
+    @Autowired
+    public RagEvaluationService(MilvusSearchService milvusSearchService,
+                                ObjectMapper objectMapper,
+                                RagEvaluationSnapshotRepository snapshotRepository) {
+        this.milvusSearchService = milvusSearchService;
+        this.objectMapper = objectMapper;
+        this.snapshotRepository = snapshotRepository;
+    }
 
     private static Map<String, DatasetDefinition> createDatasetDefinitions() {
         Map<String, DatasetDefinition> definitions = new LinkedHashMap<>();
@@ -90,6 +108,7 @@ public class RagEvaluationService {
         });
 
         testCases = getTestCases(DEFAULT_PROFILE_NAME);
+        loadPersistedHistory();
     }
 
     /**
@@ -108,6 +127,7 @@ public class RagEvaluationService {
      */
     public synchronized EvaluationReport evaluate(Long novelId, int topK, String profileName) {
         String normalizedProfile = normalizeProfile(profileName);
+        Long normalizedNovelId = normalizeNovelId(novelId);
         DatasetDefinition definition = DATASET_DEFINITIONS.get(normalizedProfile);
         if (definition == null) {
             String reason = "Unknown evaluation profile: " + normalizedProfile
@@ -129,7 +149,7 @@ public class RagEvaluationService {
         }
 
         log.info("Starting RAG evaluation: novelId={}, topK={}, profile={}, cases={}",
-                novelId, topK, normalizedProfile, cases.size());
+                normalizedNovelId, topK, normalizedProfile, cases.size());
 
         List<Double> latencies = new ArrayList<>();
         int totalRelevant = 0;
@@ -145,7 +165,7 @@ public class RagEvaluationService {
             long startTime = System.currentTimeMillis();
             List<Map<String, Object>> results;
             try {
-                results = milvusSearchService.searchSegments(novelId, query, topK);
+                results = milvusSearchService.searchSegments(normalizedNovelId, query, topK);
                 results = results == null ? List.of() : results;
             } catch (RuntimeException exception) {
                 log.warn("RAG evaluation query failed, profile={}, query={}, reason={}",
@@ -216,8 +236,9 @@ public class RagEvaluationService {
                 .sum();
         double keywordCoverage = safeRatio(totalMatchedKeywords, totalKeywords);
 
+        String historyKey = historyKey(normalizedProfile, normalizedNovelId);
         Deque<EvaluationSnapshot> reportHistory = reportHistories.computeIfAbsent(
-                normalizedProfile, ignored -> new ArrayDeque<>());
+                historyKey, ignored -> new ArrayDeque<>());
         EvaluationSnapshot previousSnapshot = reportHistory.peekLast();
         EvaluationSnapshot currentSnapshot = new EvaluationSnapshot(
                 System.currentTimeMillis(),
@@ -234,6 +255,12 @@ public class RagEvaluationService {
         );
         currentSnapshot.setProfileName(normalizedProfile);
         currentSnapshot.setDatasetVersion(definition.datasetVersion());
+        currentSnapshot.setNovelId(normalizedNovelId);
+        currentSnapshot.setMinLatencyMs(minLatency);
+        currentSnapshot.setMaxLatencyMs(maxLatency);
+        currentSnapshot.setAvgContextChars(queryCount <= 0
+                ? 0D : (double) totalRetrievedContextChars / queryCount);
+        currentSnapshot.setAvgContextTokens(Math.ceil(currentSnapshot.getAvgContextChars() / 4D));
         EvaluationComparison comparison = buildComparison(previousSnapshot, currentSnapshot);
 
         EvaluationReport report = new EvaluationReport(
@@ -253,9 +280,10 @@ public class RagEvaluationService {
         report.setAvgRetrievedContextChars(avgRetrievedContextChars);
         report.setAvgRetrievedContextTokens(Math.ceil(avgRetrievedContextChars / 4.0));
 
-        addHistorySnapshot(normalizedProfile, currentSnapshot);
+        addHistorySnapshot(historyKey, currentSnapshot);
         report.setHistory(new ArrayList<>(reportHistory));
-        lastReports.put(normalizedProfile, report);
+        lastReports.put(historyKey, report);
+        persistSnapshot(normalizedNovelId, report);
 
         if (comparison != null) {
             log.info("RAG evaluation completed: profile={}, Recall@{}={}%, Precision@{}={}%, MRR={}, Avg={}ms, P99={}ms, vs previous deltaRecall={}pp, deltaMRR={}",
@@ -283,7 +311,96 @@ public class RagEvaluationService {
     }
 
     public synchronized EvaluationReport getLastReport(String profileName) {
-        return lastReports.get(normalizeProfile(profileName));
+        String normalizedProfile = normalizeProfile(profileName);
+        EvaluationReport memoryReport = lastReports.entrySet().stream()
+                .filter(entry -> entry.getKey().startsWith(normalizedProfile + "|"))
+                .map(Map.Entry::getValue)
+                .max(Comparator.comparingLong(EvaluationReport::getTimestamp))
+                .orElse(null);
+        if (memoryReport != null || snapshotRepository == null) {
+            return memoryReport;
+        }
+
+        try {
+            return snapshotRepository.findFirstByProfileNameOrderByEvaluatedAtDesc(normalizedProfile)
+                    .map(snapshot -> toAggregateReport(
+                            toEvaluationSnapshot(snapshot),
+                            List.of(toEvaluationSnapshot(snapshot))))
+                    .orElse(null);
+        } catch (RuntimeException exception) {
+            log.warn("Failed to load latest persisted RAG report by profile, profile={}, reason={}",
+                    normalizedProfile, exception.getMessage());
+            return null;
+        }
+    }
+
+    public synchronized EvaluationReport getLastReport(Long novelId, String profileName) {
+        String normalizedProfile = normalizeProfile(profileName);
+        Long normalizedNovelId = normalizeNovelId(novelId);
+        String key = historyKey(normalizedProfile, normalizedNovelId);
+        EvaluationReport report = lastReports.get(key);
+        if (report != null) {
+            return report;
+        }
+
+        if (snapshotRepository == null) {
+            return null;
+        }
+
+        try {
+            return snapshotRepository.findFirstByProfileNameAndNovelIdOrderByEvaluatedAtDesc(
+                            normalizedProfile, normalizedNovelId)
+                    .map(snapshot -> {
+                        EvaluationSnapshot latest = toEvaluationSnapshot(snapshot);
+                        addHistorySnapshot(key, latest);
+                        EvaluationReport restored = toAggregateReport(
+                                latest,
+                                new ArrayList<>(reportHistories.get(key)));
+                        lastReports.put(key, restored);
+                        return restored;
+                    })
+                    .orElse(null);
+        } catch (RuntimeException exception) {
+            log.warn("Failed to load last persisted RAG report, profile={}, novelId={}, reason={}",
+                    normalizedProfile, normalizedNovelId, exception.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 获取持久化的聚合评测历史。
+     * 返回值不包含查询详情，避免把小说原文或测试 query 暴露给趋势面板。
+     */
+    public synchronized List<EvaluationSnapshot> getHistory(Long novelId, String profileName, int limit) {
+        String normalizedProfile = normalizeProfile(profileName);
+        Long normalizedNovelId = normalizeNovelId(novelId);
+        int normalizedLimit = Math.max(1, Math.min(limit, MAX_HISTORY_QUERY_LIMIT));
+        String key = historyKey(normalizedProfile, normalizedNovelId);
+
+        if (snapshotRepository != null) {
+            try {
+                List<EvaluationSnapshot> persistedHistory = snapshotRepository
+                        .findByProfileNameAndNovelIdOrderByEvaluatedAtDesc(
+                                normalizedProfile,
+                                normalizedNovelId,
+                                PageRequest.of(0, normalizedLimit))
+                        .stream()
+                        .map(this::toEvaluationSnapshot)
+                        .toList();
+                if (!persistedHistory.isEmpty()) {
+                    return persistedHistory;
+                }
+            } catch (RuntimeException exception) {
+                log.warn("Failed to load persisted RAG history, profile={}, novelId={}, reason={}",
+                        normalizedProfile, normalizedNovelId, exception.getMessage());
+            }
+        }
+
+        Deque<EvaluationSnapshot> memoryHistory = reportHistories.getOrDefault(key, new ArrayDeque<>());
+        return memoryHistory.stream()
+                .sorted(Comparator.comparingLong(EvaluationSnapshot::getTimestamp).reversed())
+                .limit(normalizedLimit)
+                .toList();
     }
 
     /**
@@ -304,6 +421,126 @@ public class RagEvaluationService {
     public String getDatasetVersion(String profileName) {
         DatasetDefinition definition = DATASET_DEFINITIONS.get(normalizeProfile(profileName));
         return definition == null ? null : definition.datasetVersion();
+    }
+
+    private void loadPersistedHistory() {
+        if (snapshotRepository == null) {
+            return;
+        }
+
+        try {
+            List<RagEvaluationSnapshot> persistedSnapshots = snapshotRepository
+                    .findAllByOrderByEvaluatedAtDesc(PageRequest.of(0, MAX_HISTORY_QUERY_LIMIT * 4));
+            Map<String, List<RagEvaluationSnapshot>> grouped = persistedSnapshots.stream()
+                    .collect(Collectors.groupingBy(
+                            snapshot -> historyKey(snapshot.getProfileName(), snapshot.getNovelId()),
+                            LinkedHashMap::new,
+                            Collectors.toList()));
+
+            grouped.forEach((key, snapshots) -> {
+                List<RagEvaluationSnapshot> chronological = snapshots.stream()
+                        .sorted(Comparator.comparingLong(RagEvaluationSnapshot::getEvaluatedAt))
+                        .toList();
+                Deque<EvaluationSnapshot> history = reportHistories.computeIfAbsent(
+                        key, ignored -> new ArrayDeque<>());
+                chronological.stream()
+                        .skip(Math.max(0, chronological.size() - MAX_HISTORY_SIZE))
+                        .map(this::toEvaluationSnapshot)
+                        .forEach(history::addLast);
+
+                if (!history.isEmpty()) {
+                    EvaluationSnapshot latest = history.peekLast();
+                    lastReports.put(key, toAggregateReport(latest, new ArrayList<>(history)));
+                }
+            });
+            log.info("Loaded persisted RAG evaluation history, snapshotCount={}, seriesCount={}",
+                    persistedSnapshots.size(), grouped.size());
+        } catch (RuntimeException exception) {
+            log.warn("Failed to load persisted RAG evaluation history; memory history remains available, reason={}",
+                    exception.getMessage());
+        }
+    }
+
+    private void persistSnapshot(Long novelId, EvaluationReport report) {
+        if (snapshotRepository == null || report == null) {
+            return;
+        }
+
+        try {
+            snapshotRepository.save(RagEvaluationSnapshot.builder()
+                    .profileName(report.getProfileName())
+                    .datasetVersion(report.getDatasetVersion())
+                    .novelId(normalizeNovelId(novelId))
+                    .topK(report.getTopK())
+                    .queryCount(report.getQueryCount())
+                    .queriesWithRelevantResult(report.getQueriesWithRelevantResult())
+                    .recallAtK(report.getRecallAtK())
+                    .precisionAtK(report.getPrecisionAtK())
+                    .mrr(report.getMrr())
+                    .avgLatencyMs(report.getAvgLatencyMs())
+                    .p95LatencyMs(report.getP95LatencyMs())
+                    .p99LatencyMs(report.getP99LatencyMs())
+                    .minLatencyMs(report.getMinLatencyMs())
+                    .maxLatencyMs(report.getMaxLatencyMs())
+                    .keywordCoverage(report.getKeywordCoverage())
+                    .avgContextChars(report.getAvgRetrievedContextChars())
+                    .avgContextTokens(report.getAvgRetrievedContextTokens())
+                    .evaluatedAt(report.getTimestamp())
+                    .build());
+        } catch (RuntimeException exception) {
+            log.warn("Failed to persist RAG evaluation snapshot, profile={}, novelId={}, reason={}",
+                    report.getProfileName(), normalizeNovelId(novelId), exception.getMessage());
+        }
+    }
+
+    private EvaluationSnapshot toEvaluationSnapshot(RagEvaluationSnapshot snapshot) {
+        EvaluationSnapshot result = new EvaluationSnapshot(
+                snapshot.getEvaluatedAt(),
+                snapshot.getQueryCount(),
+                snapshot.getTopK(),
+                snapshot.getRecallAtK(),
+                snapshot.getPrecisionAtK(),
+                snapshot.getMrr(),
+                snapshot.getAvgLatencyMs(),
+                snapshot.getP95LatencyMs(),
+                snapshot.getP99LatencyMs(),
+                snapshot.getKeywordCoverage(),
+                snapshot.getQueriesWithRelevantResult());
+        result.setProfileName(snapshot.getProfileName());
+        result.setDatasetVersion(snapshot.getDatasetVersion());
+        result.setNovelId(snapshot.getNovelId());
+        result.setMinLatencyMs(snapshot.getMinLatencyMs());
+        result.setMaxLatencyMs(snapshot.getMaxLatencyMs());
+        result.setAvgContextChars(snapshot.getAvgContextChars());
+        result.setAvgContextTokens(snapshot.getAvgContextTokens());
+        return result;
+    }
+
+    private EvaluationReport toAggregateReport(EvaluationSnapshot snapshot, List<EvaluationSnapshot> history) {
+        EvaluationReport report = new EvaluationReport(
+                snapshot.getTimestamp(),
+                snapshot.getQueryCount(),
+                snapshot.getTopK(),
+                snapshot.getRecallAtK(),
+                snapshot.getPrecisionAtK(),
+                snapshot.getMrr(),
+                snapshot.getAvgLatencyMs(),
+                snapshot.getP95LatencyMs(),
+                snapshot.getP99LatencyMs(),
+                snapshot.getMinLatencyMs(),
+                snapshot.getMaxLatencyMs(),
+                snapshot.getKeywordCoverage(),
+                snapshot.getQueriesWithRelevantResult(),
+                List.of());
+        report.setProfileName(snapshot.getProfileName());
+        report.setDatasetVersion(snapshot.getDatasetVersion());
+        report.setCategorySummaries(List.of());
+        report.setComparison(null);
+        report.setHistory(history);
+        report.setAvgRetrievedContextChars(snapshot.getAvgContextChars());
+        report.setAvgRetrievedContextTokens(snapshot.getAvgContextTokens());
+        report.setReason(null);
+        return report;
     }
 
     private double computeP95(List<Double> values) {
@@ -421,6 +658,14 @@ public class RagEvaluationService {
             return DEFAULT_PROFILE_NAME;
         }
         return profileName.trim();
+    }
+
+    private Long normalizeNovelId(Long novelId) {
+        return novelId == null || novelId < 0 ? 0L : novelId;
+    }
+
+    private String historyKey(String profileName, Long novelId) {
+        return normalizeProfile(profileName) + "|" + normalizeNovelId(novelId);
     }
 
     private String normalizeCategory(String category) {
@@ -640,8 +885,13 @@ public class RagEvaluationService {
         private double avgLatencyMs;
         private double p95LatencyMs;
         private double p99LatencyMs;
+        private double minLatencyMs;
+        private double maxLatencyMs;
         private double keywordCoverage;
         private int queriesWithRelevantResult;
+        private double avgContextChars;
+        private double avgContextTokens;
+        private Long novelId;
         private String profileName;
         private String datasetVersion;
 
@@ -674,12 +924,22 @@ public class RagEvaluationService {
         public double getAvgLatencyMs() { return avgLatencyMs; }
         public double getP95LatencyMs() { return p95LatencyMs; }
         public double getP99LatencyMs() { return p99LatencyMs; }
+        public double getMinLatencyMs() { return minLatencyMs; }
+        public double getMaxLatencyMs() { return maxLatencyMs; }
         public double getKeywordCoverage() { return keywordCoverage; }
         public int getQueriesWithRelevantResult() { return queriesWithRelevantResult; }
+        public double getAvgContextChars() { return avgContextChars; }
+        public double getAvgContextTokens() { return avgContextTokens; }
+        public Long getNovelId() { return novelId; }
         public String getProfileName() { return profileName; }
         public String getDatasetVersion() { return datasetVersion; }
         public void setProfileName(String profileName) { this.profileName = profileName; }
         public void setDatasetVersion(String datasetVersion) { this.datasetVersion = datasetVersion; }
+        public void setMinLatencyMs(double minLatencyMs) { this.minLatencyMs = minLatencyMs; }
+        public void setMaxLatencyMs(double maxLatencyMs) { this.maxLatencyMs = maxLatencyMs; }
+        public void setAvgContextChars(double avgContextChars) { this.avgContextChars = avgContextChars; }
+        public void setAvgContextTokens(double avgContextTokens) { this.avgContextTokens = avgContextTokens; }
+        public void setNovelId(Long novelId) { this.novelId = novelId; }
     }
 
     public static class EvaluationComparison {

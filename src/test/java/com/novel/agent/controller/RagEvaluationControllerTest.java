@@ -107,11 +107,48 @@ class RagEvaluationControllerTest {
 
     @Test
     void returnsEmptyReportWhenNoEvaluationHasRun() throws Exception {
-        when(ragEvaluationService.getLastReport()).thenReturn(null);
+        when(ragEvaluationService.getLastReport(anyLong(), anyString())).thenReturn(null);
 
         mockMvc.perform(get("/api/v1/novel/evaluate/report"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.queryCount").value(0))
                 .andExpect(jsonPath("$.reason").value("No evaluation has been run yet"));
+    }
+
+    @Test
+    void returnsAggregateEvaluationHistoryWithoutQueryDetails() throws Exception {
+        RagEvaluationService.EvaluationSnapshot snapshot = new RagEvaluationService.EvaluationSnapshot(
+                123L,
+                15,
+                5,
+                73.33,
+                39.56,
+                0.689,
+                111.6,
+                240.0,
+                240.0,
+                80.0,
+                10);
+        snapshot.setProfileName(RagEvaluationService.CHINESE_LIVE_PROFILE_NAME);
+        snapshot.setDatasetVersion("2026-08-10");
+        snapshot.setNovelId(0L);
+
+        when(ragEvaluationService.getHistory(eq(0L), eq(RagEvaluationService.CHINESE_LIVE_PROFILE_NAME), eq(5)))
+                .thenReturn(List.of(snapshot));
+        when(ragEvaluationService.getDatasetVersion(RagEvaluationService.CHINESE_LIVE_PROFILE_NAME))
+                .thenReturn("2026-08-10");
+
+        mockMvc.perform(get("/api/v1/novel/evaluate/history")
+                        .param("novelId", "0")
+                        .param("profile", RagEvaluationService.CHINESE_LIVE_PROFILE_NAME)
+                        .param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(1))
+                .andExpect(jsonPath("$.profileName")
+                        .value(RagEvaluationService.CHINESE_LIVE_PROFILE_NAME))
+                .andExpect(jsonPath("$.history[0].recallAtK").value(73.33))
+                .andExpect(jsonPath("$.history[0].novelId").value(0))
+                .andExpect(jsonPath("$.history[0].query").doesNotExist())
+                .andExpect(jsonPath("$.history[0].details").doesNotExist());
     }
 }

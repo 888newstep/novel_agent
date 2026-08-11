@@ -1,20 +1,150 @@
 {
   "runId": "R1-ZH-LIVE-20260810",
-  "status": "blocked",
+  "status": "verified",
   "runDate": "2026-08-10",
   "profileName": "writing-zh-live-v1",
   "datasetVersion": "2026-08-10",
   "novelId": 0,
   "topK": 5,
   "queryCount": 15,
+  "repetitions": 3,
   "environment": {
-    "mysql": "configured",
-    "milvus": "configured_but_tcp_unreachable",
-    "embeddingProvider": "configured"
+    "mysql": "configured_and_connected",
+    "milvus": "configured_and_reachable",
+    "embeddingProvider": "configured_and_used"
   },
-  "semanticMetrics": null,
-  "latencyMetrics": null,
+  "aggregate": {
+    "recallAtK": {
+      "mean": 73.33333333333333,
+      "min": 73.33333333333333,
+      "max": 73.33333333333333
+    },
+    "precisionAtK": {
+      "mean": 39.55555555555555,
+      "min": 38.666666666666664,
+      "max": 40.0
+    },
+    "mrr": {
+      "mean": 0.6888888888888889,
+      "min": 0.6666666666666666,
+      "max": 0.7
+    },
+    "keywordCoverage": 62.96296296296296,
+    "avgLatencyMs": {
+      "mean": 111.62222222222222,
+      "min": 60.733333333333334,
+      "max": 210.33333333333334
+    },
+    "p95LatencyMs": {
+      "mean": 240.0,
+      "min": 73.0,
+      "max": 567.0
+    },
+    "p99LatencyMs": {
+      "mean": 240.0,
+      "min": 73.0,
+      "max": 567.0
+    },
+    "avgRetrievedContextChars": 2250.0,
+    "avgRetrievedContextTokens": 563.0
+  },
+  "runs": [
+    {
+      "runNumber": 1,
+      "recallAtK": 73.33333333333333,
+      "precisionAtK": 38.666666666666664,
+      "mrr": 0.7,
+      "keywordCoverage": 62.96296296296296,
+      "avgLatencyMs": 210.33333333333334,
+      "p95LatencyMs": 567.0,
+      "p99LatencyMs": 567.0
+    },
+    {
+      "runNumber": 2,
+      "recallAtK": 73.33333333333333,
+      "precisionAtK": 40.0,
+      "mrr": 0.7,
+      "keywordCoverage": 62.96296296296296,
+      "avgLatencyMs": 63.8,
+      "p95LatencyMs": 80.0,
+      "p99LatencyMs": 80.0
+    },
+    {
+      "runNumber": 3,
+      "recallAtK": 73.33333333333333,
+      "precisionAtK": 40.0,
+      "mrr": 0.6666666666666666,
+      "keywordCoverage": 62.96296296296296,
+      "avgLatencyMs": 60.733333333333334,
+      "p95LatencyMs": 73.0,
+      "p99LatencyMs": 73.0
+    }
+  ],
+  "representativeScenarioSummary": [
+    {
+      "category": "character_profile",
+      "queryCount": 3,
+      "recallAtK": 66.66666666666666,
+      "precisionAtK": 33.33333333333333,
+      "mrr": 0.5,
+      "keywordCoverage": 75.0
+    },
+    {
+      "category": "item_skill",
+      "queryCount": 3,
+      "recallAtK": 100.0,
+      "precisionAtK": 66.66666666666666,
+      "mrr": 1.0,
+      "keywordCoverage": 83.33333333333334
+    },
+    {
+      "category": "prewriting_context",
+      "queryCount": 3,
+      "recallAtK": 66.66666666666666,
+      "precisionAtK": 60.0,
+      "mrr": 0.6666666666666666,
+      "keywordCoverage": 33.33333333333333
+    },
+    {
+      "category": "unresolved_event",
+      "queryCount": 3,
+      "recallAtK": 33.33333333333333,
+      "precisionAtK": 13.333333333333334,
+      "mrr": 0.3333333333333333,
+      "keywordCoverage": 33.33333333333333
+    },
+    {
+      "category": "world_setting",
+      "queryCount": 3,
+      "recallAtK": 100.0,
+      "precisionAtK": 20.0,
+      "mrr": 1.0,
+      "keywordCoverage": 100.0
+    }
+  ],
+  "unmatchedCases": [
+    {
+      "category": "character_profile",
+      "query": "少宫主"
+    },
+    {
+      "category": "unresolved_event",
+      "query": "天极门 被灭宗"
+    },
+    {
+      "category": "unresolved_event",
+      "query": "火祖洞天 七狱塔"
+    },
+    {
+      "category": "prewriting_context",
+      "query": "黑皇城 少宫主"
+    }
+  ],
   "vectorsWritten": false,
-  "reason": "The configured Milvus TCP endpoint was not reachable during application startup, so the API-backed evaluation did not execute any query.",
-  "nextAction": "Re-run scripts/run-rag-evaluation.ps1 with -Profile writing-zh-live-v1 after the Milvus endpoint is reachable."
+  "notes": [
+    "Three sequential read-only evaluations ran against novelId=0.",
+    "The first run includes cold-start latency; runs two and three represent the warmed process.",
+    "The initial blocked attempt earlier on 2026-08-10 is superseded by this reachable-endpoint run.",
+    "This is a 15-query operational baseline, not a capacity claim."
+  ]
 }

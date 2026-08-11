@@ -138,7 +138,7 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - problem: the existing English fixture and the live Chinese corpus shared one history, so a profile switch could create a misleading comparison
 - change: added `writing-zh-live-v1` with 15 Chinese cases, profile-aware dataset loading, independent report history, explicit empty-report reasons, `/profiles` metadata, and `-Profile` support in `scripts/run-rag-evaluation.ps1`
 - result: the default `writing-default-v1` contract remains backward compatible; the new Chinese dataset loads in CI and the service/controller test suite reaches 31 passing tests
-- live validation: attempted on 2026-08-10 with `novelId=0` and `TopK=5`, but the configured Milvus TCP endpoint was unreachable during startup; no semantic metrics were claimed and no vectors were written
+- live validation: the first attempt on 2026-08-10 was blocked by Milvus TCP reachability; after the endpoint recovered, three sequential read-only runs with `novelId=0` and `TopK=5` produced Recall@5 `73.3%`, Precision@5 `38.7%–40.0%`, MRR `0.667–0.700`, and a mean latency of `111.6ms`; no vectors were written
 - evidence: `src/main/resources/rag_eval_dataset_zh.json`, `src/main/java/com/novel/agent/service/RagEvaluationService.java`, `src/main/java/com/novel/agent/controller/RagEvaluationController.java`, and `docs/benchmarks/rag-evaluation-zh-live-20260810.json`
 ### 2026-08-10 (live Milvus validation and collection lifecycle hardening)
 
@@ -167,6 +167,15 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - tradeoff: the benchmark uses a small operational sample and must not be presented as a 50K capacity claim; larger runs still need the same cleanup discipline
 - evidence: `src/main/java/com/novel/agent/service/DataImportService.java`, `src/main/java/com/novel/agent/controller/DataImportController.java`, `src/test/java/com/novel/agent/service/DataImportServiceTest.java`, `scripts/run-import-benchmark.ps1`, and `docs/BENCHMARK_REPORT.md`
 
+### 2026-08-10 (larger isolated import benchmark)
+
+- topic: larger-scale import throughput evidence
+- problem: the first 60-record run proved isolation and cleanup but was too small to show behavior beyond a smoke-sized sample
+- change: replayed the existing JSONL import contract with 600 generated records using temporary positive `novelId` isolation and automatic cleanup
+- result: 600 records produced 1200 segments in `37.853s` service time at `15.85 records/s` and `31.7 segments/s`, with `0` retries, `0` failures, `3` flushes, and no remaining checkpoint
+- tradeoff: this is stronger operational evidence but still not a capacity claim; the next run must pin host resources and use a representative corpus
+- evidence: `scripts/run-import-benchmark.ps1`, `docs/benchmarks/import-benchmark-large-live-20260810.json`, and `docs/BENCHMARK_REPORT.md`
+
 ### 2026-08-10 (deterministic token-cost governance evidence)
 
 - topic: cost governance measurement
@@ -175,3 +184,12 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - result: with four identical writing requests, strict governance accepted `2/4`, blocked `2/4`, and reduced billable tokens and estimated cost by `50%`
 - tradeoff: the benchmark uses synthetic pricing to validate control behavior; it is not a real provider billing quote
 - evidence: `src/test/java/com/novel/agent/service/CostGovernanceBenchmarkTest.java`, `scripts/run-cost-governance-benchmark.ps1`, `docs/COST_GOVERNANCE_CASE.md`, and `docs/benchmarks/cost-governance-benchmark-20260810.json`
+
+### 2026-08-10 (aggregate RAG evaluation history)
+
+- topic: durable evaluation evidence without persisting novel content
+- problem: RAG reports were useful in the current process, but a restart removed trend history and a full report would be too large and privacy-sensitive to persist by default
+- change: added a MySQL aggregate snapshot entity/repository, an incremental migration, profile-plus-novel isolation, bounded history/report APIs, startup restoration, and best-effort database degradation
+- result: a live Chinese evaluation recorded Recall@5 `80.0%`, Precision@5 `41.3333%`, MRR `0.7556`, average latency `307.733ms`, and `P95/P99=887ms`; one snapshot row was restored after restart while query details remained absent
+- tradeoff: history stores scalar aggregates only; Prometheus time-series export and pinned-host capacity measurement remain separate follow-up work
+- evidence: `src/main/java/com/novel/agent/entity/RagEvaluationSnapshot.java`, `src/main/java/com/novel/agent/repository/RagEvaluationSnapshotRepository.java`, `src/main/java/com/novel/agent/service/RagEvaluationService.java`, `sql/migrations/V20260810__add_rag_evaluation_snapshots.sql`, `docs/RAG_EVALUATION_HISTORY.md`, and `docs/benchmarks/rag-evaluation-history-live-20260810.json`
