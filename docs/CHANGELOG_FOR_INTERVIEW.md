@@ -193,3 +193,12 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - result: a live Chinese evaluation recorded Recall@5 `80.0%`, Precision@5 `41.3333%`, MRR `0.7556`, average latency `307.733ms`, and `P95/P99=887ms`; one snapshot row was restored after restart while query details remained absent
 - tradeoff: history stores scalar aggregates only; Prometheus time-series export and pinned-host capacity measurement remain separate follow-up work
 - evidence: `src/main/java/com/novel/agent/entity/RagEvaluationSnapshot.java`, `src/main/java/com/novel/agent/repository/RagEvaluationSnapshotRepository.java`, `src/main/java/com/novel/agent/service/RagEvaluationService.java`, `sql/migrations/V20260810__add_rag_evaluation_snapshots.sql`, `docs/RAG_EVALUATION_HISTORY.md`, and `docs/benchmarks/rag-evaluation-history-live-20260810.json`
+
+### 2026-08-11 (Prometheus operational metrics)
+
+- topic: operational observability for RAG quality and latency
+- problem: MySQL history made aggregate reports durable, but dashboards still had no standard time-series scrape contract for completed evaluations, query latency, skips, or persistence failures
+- change: added Spring Boot Actuator, Micrometer Prometheus export, profile-scoped RAG counters/timers/latest gauges, bounded skip reasons, restart restoration of latest gauges, and metric contract tests
+- result: `GET /actuator/prometheus` now exposes dashboard-ready RAG signals without putting `novelId`, query text, retrieved content, or credentials into metric labels
+- tradeoff: counters and timers are process-local and reset on JVM restart; Prometheus must scrape the endpoint for durable time-series history, while MySQL restores latest gauges
+- evidence: `src/main/java/com/novel/agent/service/RagEvaluationMetrics.java`, `src/test/java/com/novel/agent/service/RagEvaluationMetricsTest.java`, `docs/OBSERVABILITY.md`, and `src/main/resources/application.yml`

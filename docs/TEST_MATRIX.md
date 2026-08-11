@@ -1,6 +1,6 @@
 # Test Matrix
 
-Updated: 2026-08-10
+Updated: 2026-08-11
 
 ## Purpose
 
@@ -11,19 +11,21 @@ It is intentionally written as a GitHub-facing engineering document instead of a
 
 - build entry: `mvn test -DskipITs`
 - latest verified status: pass
-- current automated test count: 35
+- current automated test count: 37
 - test types currently covered:
   - service-level unit tests
   - controller contract tests
   - cost-governance and degradation-path tests
   - import retry and progress-status tests
   - persisted RAG evaluation history tests
+  - Prometheus metric contract tests
 
 ## Coverage Scope
 
 | Area | What is verified | Evidence |
 |------|------------------|----------|
 | Retrieval evaluation | scenario-based evaluation report generation, profile isolation, explicit empty-report reasons, stable comparison baseline, latency percentile fields, aggregate snapshot persistence, restart restoration, and best-effort database degradation | `src/test/java/com/novel/agent/service/RagEvaluationServiceTest.java` |
+| Prometheus metrics | counter/timer/latest-gauge values, bounded skip reasons, and no `novelId` high-cardinality tag | `src/test/java/com/novel/agent/service/RagEvaluationMetricsTest.java` |
 | Retrieval search | result merging, explanation output, chapter-aware filtering behavior, raw-score versus writing-default ranking case | `src/test/java/com/novel/agent/service/MilvusSearchServiceTest.java` |
 | Writing generation response | `memoryLayers`, `consistencyCheck`, `generationTrace`, `postGenerationCheck` response contract, warn-to-pass regression gate | `src/test/java/com/novel/agent/controller/NovelControllerTest.java` |
 | Budget degradation | budget block fallback to outline-only response | `src/test/java/com/novel/agent/controller/NovelControllerTest.java` |
@@ -40,6 +42,7 @@ It is intentionally written as a GitHub-facing engineering document instead of a
 
 - `TokenCostServiceTest`
 - `RagEvaluationServiceTest` (including persisted aggregate history)
+- `RagEvaluationMetricsTest` (including low-cardinality Prometheus contract)
 - `MilvusSearchServiceTest`
 - `KnowledgeSearchServiceTest`
 - `DataImportServiceTest`

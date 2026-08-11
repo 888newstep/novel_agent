@@ -46,6 +46,7 @@ See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walk
 - Chapter generation orchestration built around DeepSeek prompts and retrieved context.
 - Token cost governance with budget limits, usage history, and a lightweight dashboard.
 - RAG evaluation workflows for recall, precision, MRR, keyword coverage, and latency.
+- Prometheus-compatible operational metrics for RAG evaluations, latency, skips, and persistence failures.
 - Import checkpoints, progress snapshots, retry cleanup, and failure propagation for large datasets.
 - Per-request, per-novel, per-model, daily, and monthly token governance with useful degraded responses.
 
@@ -58,14 +59,16 @@ See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walk
 | Import stability | Streaming import, novel-scoped checkpoints, progress reporting, and idempotent retries | `src/main/java/com/novel/agent/service/DataImportService.java` |
 | Cost governance | Scoped budgets, degradation events, model fallback, and outline fallback | `src/main/java/com/novel/agent/service/TokenCostService.java` |
 | Evaluation history | MySQL aggregate snapshots with in-memory fallback; query details and novel text are not persisted | `src/main/java/com/novel/agent/service/RagEvaluationService.java` |
+| Operational observability | Actuator `/actuator/prometheus`, low-cardinality RAG counters/timers/latest gauges, and restart restoration | `docs/OBSERVABILITY.md` |
 | Dependency hygiene | Security-fixed transitive baselines, Dependabot, and PR dependency review | `docs/DEPENDENCY_SECURITY.md` |
-| Regression safety | 35 automated service and controller contract tests | `docs/TEST_MATRIX.md` |
+| Regression safety | 37 automated service and controller contract tests | `docs/TEST_MATRIX.md` |
 
 ## Tech Stack
 
 - Java 17
 - Spring Boot 3.5
-- Spring Web, WebFlux, Validation, JPA
+- Spring Web, WebFlux, Validation, JPA, Actuator
+- Micrometer and Prometheus
 - MySQL
 - Milvus
 - LangChain4j
@@ -96,6 +99,7 @@ docs/TEST_MATRIX.md        Automated verification matrix
 docs/METRICS_BASELINE.md   Public metrics baseline and evidence status
 docs/COST_GOVERNANCE_CASE.md Cost-governance demo case
 docs/RAG_EVALUATION_HISTORY.md Aggregate evaluation history and restart behavior
+docs/OBSERVABILITY.md      Prometheus metrics and operational dashboard contract
 ```
 
 ## Quick Start
@@ -147,6 +151,7 @@ The default application address is `http://localhost:8080`.
 | Import progress | `GET /api/import/progress` |
 | RAG evaluation | `POST /api/v1/novel/evaluate/segments`; `GET /api/v1/novel/evaluate/profiles` |
 | RAG report/history | `GET /api/v1/novel/evaluate/report`; `GET /api/v1/novel/evaluate/history` |
+| Prometheus metrics | `GET /actuator/prometheus`; `GET /actuator/metrics` |
 | Cost summary | `GET /api/admin/cost/summary` |
 | Cost dashboard | `GET /cost-panel` |
 
@@ -164,13 +169,14 @@ The default application address is `http://localhost:8080`.
 - `docs/METRICS_BASELINE.md`
 - `docs/COST_GOVERNANCE_CASE.md`
 - `docs/RAG_EVALUATION_HISTORY.md`
+- `docs/OBSERVABILITY.md`
 - `docs/DEPENDENCY_SECURITY.md`
 - `CONTRIBUTING.md`
 - `SECURITY.md`
 
 ## Verification Baseline
 
-The current repository includes 35 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, evaluation history, and controller APIs.
+The current repository includes 37 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, evaluation history, Prometheus metric contracts, and controller APIs.
 
 ```powershell
 mvn test -DskipITs

@@ -1,6 +1,6 @@
 # Metrics Baseline
 
-Updated: 2026-08-10
+Updated: 2026-08-11
 
 ## Purpose
 
@@ -22,6 +22,7 @@ Use the following labels consistently:
 | Evaluation profile | Verified | `writing-default-v1` | `src/main/java/com/novel/agent/service/RagEvaluationService.java` |
 | Retrieval metrics emitted | Verified | `Recall@K`, `Precision@K`, `MRR`, `Avg`, `P95`, `P99`, context chars/tokens | `src/main/java/com/novel/agent/service/RagEvaluationService.java` |
 | Evaluation history persistence | Verified | MySQL aggregate snapshots keyed by `profile_name + novel_id`, with in-memory fallback; query details and novel text excluded | `src/main/java/com/novel/agent/entity/RagEvaluationSnapshot.java`, `sql/migrations/V20260810__add_rag_evaluation_snapshots.sql` |
+| Prometheus RAG export | Verified | Actuator `/actuator/prometheus`; profile-scoped counters, query latency timer, latest quality/latency gauges, skip counters, and persistence-failure counter | `src/main/java/com/novel/agent/service/RagEvaluationMetrics.java`, `docs/OBSERVABILITY.md` |
 | Import retry budget | Verified | `max-retries=3`, `retry-backoff-ms=1000` | `src/main/resources/application.yml` |
 | Import batch size | Verified | `18` | `src/main/resources/application.yml` |
 | Cost-governance scopes | Verified | per request, per novel, per model, daily, monthly | `src/main/java/com/novel/agent/service/TokenCostService.java` |

@@ -1,6 +1,6 @@
 # `novel_agent` Roadmap
 
-Updated: 2026-08-10
+Updated: 2026-08-11
 
 ## 1. Scope
 
@@ -185,4 +185,4 @@ The P0/P1/P2 source-controlled plan is complete. The following items are intenti
 - [x] repeat the import benchmark at a larger operational scale with novelId isolation and cleanup
 - [ ] repeat the import benchmark on a pinned host specification and representative corpus before making capacity claims
 - [x] persist aggregate RAG evaluation snapshots in MySQL with an in-memory fallback and history API
-- [ ] add Prometheus time-series export for operational dashboards after the MySQL history contract stabilizes
+- [x] add Prometheus time-series export for operational dashboards after the MySQL history contract stabilizes

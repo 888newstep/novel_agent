@@ -36,6 +36,7 @@ public class RagEvaluationService {
     private final MilvusSearchService milvusSearchService;
     private final ObjectMapper objectMapper;
     private final RagEvaluationSnapshotRepository snapshotRepository;
+    private final RagEvaluationMetrics ragEvaluationMetrics;
 
     /** 默认评测 profile，保持既有 API 和 CI fixture 的兼容性。 */
     public static final String DEFAULT_PROFILE_NAME = "writing-default-v1";
@@ -59,16 +60,24 @@ public class RagEvaluationService {
 
     /** 保留无数据库单元测试和脚本场景的轻量构造方式。 */
     public RagEvaluationService(MilvusSearchService milvusSearchService, ObjectMapper objectMapper) {
-        this(milvusSearchService, objectMapper, null);
+        this(milvusSearchService, objectMapper, null, null);
+    }
+
+    public RagEvaluationService(MilvusSearchService milvusSearchService,
+                                ObjectMapper objectMapper,
+                                RagEvaluationSnapshotRepository snapshotRepository) {
+        this(milvusSearchService, objectMapper, snapshotRepository, null);
     }
 
     @Autowired
     public RagEvaluationService(MilvusSearchService milvusSearchService,
                                 ObjectMapper objectMapper,
-                                RagEvaluationSnapshotRepository snapshotRepository) {
+                                RagEvaluationSnapshotRepository snapshotRepository,
+                                RagEvaluationMetrics ragEvaluationMetrics) {
         this.milvusSearchService = milvusSearchService;
         this.objectMapper = objectMapper;
         this.snapshotRepository = snapshotRepository;
+        this.ragEvaluationMetrics = ragEvaluationMetrics;
     }
 
     private static Map<String, DatasetDefinition> createDatasetDefinitions() {
@@ -133,6 +142,10 @@ public class RagEvaluationService {
             String reason = "Unknown evaluation profile: " + normalizedProfile
                     + "; available profiles: " + String.join(", ", getAvailableProfiles());
             log.warn("RAG evaluation skipped: {}", reason);
+            if (ragEvaluationMetrics != null) {
+                ragEvaluationMetrics.recordSkipped(normalizedProfile,
+                        RagEvaluationMetrics.SkipReason.UNKNOWN_PROFILE);
+            }
             return EvaluationReport.empty(normalizedProfile, null, reason);
         }
 
@@ -140,11 +153,19 @@ public class RagEvaluationService {
         if (cases.isEmpty()) {
             String reason = "Test dataset is empty, please check " + definition.resourceName();
             log.warn("RAG evaluation skipped, profile={}, reason={}", normalizedProfile, reason);
+            if (ragEvaluationMetrics != null) {
+                ragEvaluationMetrics.recordSkipped(normalizedProfile,
+                        RagEvaluationMetrics.SkipReason.EMPTY_DATASET);
+            }
             return EvaluationReport.empty(normalizedProfile, definition.datasetVersion(), reason);
         }
         if (topK <= 0) {
             String reason = "topK must be greater than 0";
             log.warn("RAG evaluation skipped, profile={}, reason={}", normalizedProfile, reason);
+            if (ragEvaluationMetrics != null) {
+                ragEvaluationMetrics.recordSkipped(normalizedProfile,
+                        RagEvaluationMetrics.SkipReason.INVALID_TOP_K);
+            }
             return EvaluationReport.empty(normalizedProfile, definition.datasetVersion(), reason);
         }
 
@@ -174,6 +195,9 @@ public class RagEvaluationService {
             }
             long elapsed = System.currentTimeMillis() - startTime;
             latencies.add((double) elapsed);
+            if (ragEvaluationMetrics != null) {
+                ragEvaluationMetrics.recordQueryLatency(normalizedProfile, elapsed);
+            }
 
             Set<String> matchedKeywords = new LinkedHashSet<>();
             List<ResultItem> resultItems = new ArrayList<>();
@@ -284,6 +308,21 @@ public class RagEvaluationService {
         report.setHistory(new ArrayList<>(reportHistory));
         lastReports.put(historyKey, report);
         persistSnapshot(normalizedNovelId, report);
+        if (ragEvaluationMetrics != null) {
+            ragEvaluationMetrics.recordEvaluation(
+                    normalizedProfile,
+                    topK,
+                    report.getQueryCount(),
+                    report.getRecallAtK(),
+                    report.getPrecisionAtK(),
+                    report.getMrr(),
+                    report.getKeywordCoverage(),
+                    report.getAvgLatencyMs(),
+                    report.getP95LatencyMs(),
+                    report.getP99LatencyMs(),
+                    report.getTimestamp()
+            );
+        }
 
         if (comparison != null) {
             log.info("RAG evaluation completed: profile={}, Recall@{}={}%, Precision@{}={}%, MRR={}, Avg={}ms, P99={}ms, vs previous deltaRecall={}pp, deltaMRR={}",
@@ -451,6 +490,21 @@ public class RagEvaluationService {
                 if (!history.isEmpty()) {
                     EvaluationSnapshot latest = history.peekLast();
                     lastReports.put(key, toAggregateReport(latest, new ArrayList<>(history)));
+                    if (ragEvaluationMetrics != null) {
+                        ragEvaluationMetrics.restoreLatest(
+                                latest.getProfileName(),
+                                latest.getTopK(),
+                                latest.getQueryCount(),
+                                latest.getRecallAtK(),
+                                latest.getPrecisionAtK(),
+                                latest.getMrr(),
+                                latest.getKeywordCoverage(),
+                                latest.getAvgLatencyMs(),
+                                latest.getP95LatencyMs(),
+                                latest.getP99LatencyMs(),
+                                latest.getTimestamp()
+                        );
+                    }
                 }
             });
             log.info("Loaded persisted RAG evaluation history, snapshotCount={}, seriesCount={}",
@@ -490,6 +544,9 @@ public class RagEvaluationService {
         } catch (RuntimeException exception) {
             log.warn("Failed to persist RAG evaluation snapshot, profile={}, novelId={}, reason={}",
                     report.getProfileName(), normalizeNovelId(novelId), exception.getMessage());
+            if (ragEvaluationMetrics != null) {
+                ragEvaluationMetrics.recordPersistenceFailure(report.getProfileName());
+            }
         }
     }
 
