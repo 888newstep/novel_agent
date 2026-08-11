@@ -172,7 +172,7 @@ If this roadmap is completed well, `novel_agent` can support resume statements l
 - [x] cost and stability mechanisms can be demonstrated
 - [x] the GitHub docs support interview storytelling directly
 
-The source-controlled definition of done is complete. Live Milvus throughput now has a small isolated baseline, while large-scale capacity and corpus-aligned semantic quality remain explicit maintenance tasks and are not replaced by CI fixture results.
+The source-controlled definition of done is complete. Live Milvus throughput now has both an isolated operational baseline and a pinned-host, schema-aligned representative baseline. These results remain bounded operational evidence and are not a 50K production capacity claim.
 
 ## 9. Maintenance Queue
 
@@ -183,6 +183,6 @@ The P0/P1/P2 source-controlled plan is complete. The following items are intenti
 - [x] add a corpus-aligned Chinese RAG evaluation profile and isolate its history from the English fixture
 - [x] run the aligned Chinese profile against reachable Milvus and publish a bounded three-run semantic quality baseline
 - [x] repeat the import benchmark at a larger operational scale with novelId isolation and cleanup
-- [ ] repeat the import benchmark on a pinned host specification and representative corpus before making capacity claims
+- [x] repeat the import benchmark on a pinned host specification and schema-aligned representative corpus; keep real-corpus and 50K capacity claims explicitly pending
 - [x] persist aggregate RAG evaluation snapshots in MySQL with an in-memory fallback and history API
 - [x] add Prometheus time-series export for operational dashboards after the MySQL history contract stabilizes

@@ -58,15 +58,14 @@ Use the following labels consistently:
 
 ### Public Benchmark Status
 
-- current public throughput number: verified on 2026-08-10 with isolated live runs at two sample sizes
-- latest live sample: 600 JSONL records -> 1200 segments in `37.853s` service time
-- latest throughput: `15.85 records/s` and `31.7 segments/s`
-- latest reliability counters: `0` retries, `3` flushes, `0` failures, checkpoint removed
-- benchmark environment required for the next capacity claim:
-  - active embedding provider
-  - reachable Milvus instance
-  - representative training dataset
-  - stable host specification
+- current public throughput number: verified on 2026-08-11 with a pinned-host, isolated live run
+- latest live sample: 1,000 schema-aligned Chinese writing-memory records -> 2,000 segments in `55.227s` service time
+- latest throughput: `18.11 records/s` and `36.21 segments/s`
+- latest reliability counters: `0` retries, `4` flushes, `0` failures, checkpoint removed, cleanup succeeded
+- remaining evidence boundary for a production capacity claim:
+  - representative real training dataset
+  - target deployment host specification
+  - larger scale and repeated runs
 
 ### Latest Larger Operational Run
 
@@ -77,17 +76,20 @@ Use the following labels consistently:
 - evidence: `docs/benchmarks/import-benchmark-large-live-20260810.json`
 - interpretation: operational evidence only; do not extrapolate linearly to 50K records
 
-### Next Scale Run To Capture
+### Pinned-Host Representative Run
 
-For the next larger import run, preserve the same public metric block and add the host specification:
+- sample: 1,000 deterministic schema-aligned Chinese writing-memory records -> 2,000 segments
+- service duration: `55.227s`; wall-clock duration: `55.745s`
+- throughput: `18.11 records/s`; `36.21 segments/s`
+- reliability: `0` retries, `0` failures, `4` flushes, cleanup succeeded
+- host: Windows 11 Home Chinese Edition `10.0.26200`, i5-13500H, 12 physical cores / 16 logical processors, `15.73 GiB` visible memory
+- runtime: Java `17.0.12`, Maven `3.9.9`, local MySQL `8.0.46`, cloud Milvus, SiliconFlow `BAAI/bge-m3`
+- import configuration: batch size `18`, max retries `3`, retry backoff `1000ms`
+- scenario distribution: five writing-memory scenarios, `200` records each
+- evidence: `docs/benchmarks/import-benchmark-representative-live-20260811.json` and `scripts/generate-representative-import-dataset.ps1`
+- interpretation: this closes the pinned-host evidence task for a bounded schema-aligned baseline; it does not justify linear extrapolation to 50K records or production capacity.
 
-- dataset size
-- total import time
-- average records per second
-- average segments per second
-- retry count
-- flush count
-- failure count
+The benchmark uses `/api/import/training-data/{novelId}` with a temporary positive `novelId`; the shared corpus was not modified and all temporary vectors were deleted afterward.
 
 ### Reproducible Import Benchmark
 
@@ -102,7 +104,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-import-benchmark
   -Cleanup
 ```
 
-The 2026-08-10 samples are operational baselines, not a 50K-record capacity claim. A larger run should preserve the same fields and record host, embedding model, dataset size, and cleanup id.
+The 2026-08-10 and 2026-08-11 samples are operational baselines, not a 50K-record capacity claim. Generate the deterministic corpus with `scripts/generate-representative-import-dataset.ps1`, then run the isolated benchmark with cleanup enabled.
 
 ## Retrieval Metrics
 

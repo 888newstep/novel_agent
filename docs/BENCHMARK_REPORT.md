@@ -44,6 +44,7 @@ Record the following in every round:
 | R1-ZH-LIVE-20260810 | 2026-08-10 | 15 | Chinese corpus-aligned live retrieval | 5 | 73.3% | 39.6% | 0.689 | 111.6ms | 240ms | 240ms | 563 | n/a | Mean of 3 sequential read-only runs; first run cold-started; no vectors written |
 | R1-HISTORY-SMOKE-20260810 | 2026-08-10 | 15 | aggregate persistence and restart smoke | 5 | 80.0% | 41.3% | 0.756 | 307.7ms | 887ms | 887ms | not recorded | n/a | One read-only run; one MySQL snapshot row; report/history restored after restart; details absent |
 | IMPORT-LIVE-20260810-LARGE | 2026-08-10 | 600 | isolated JSONL import | n/a | n/a | n/a | n/a | 38.0s | n/a | n/a | n/a | n/a | 1200 segments, 15.85 records/s, 31.7 segments/s, 0 retries, cleanup succeeded |
+| IMPORT-LIVE-20260811-PINNED-REPRESENTATIVE | 2026-08-11 | 1000 | pinned-host schema-aligned Chinese import | n/a | n/a | n/a | n/a | 55.2s | n/a | n/a | n/a | n/a | 2000 segments, 18.11 records/s, 36.21 segments/s, 0 retries, cleanup succeeded |
 
 `R0-CONTRACT` and `R1-FIXTURE` are deterministic CI evidence, not production latency claims. A live row must be recorded only after the embedding provider, Milvus instance, host, dataset, and parameters are written down.
 
@@ -135,6 +136,32 @@ Record the following in every round:
 - evidence: `scripts/run-import-benchmark.ps1` and `docs/benchmarks/import-benchmark-large-live-20260810.json`
 - result: throughput increased from `7.34` to `15.85` records/s and from `14.68` to `31.7` segments/s; both runs completed with zero retries and zero failures
 - caveat: the sample used generated content conforming to the existing JSONL contract; representative corpus and pinned host specifications are still required before capacity claims
+
+### IMPORT-LIVE-20260811-PINNED-REPRESENTATIVE
+
+| Field | Value |
+|------|-------|
+| Input format | JSON lines |
+| Source records | 1000 |
+| Imported records | 1000 |
+| Stored segments | 2000 |
+| Service duration | `55.227s` |
+| Wall-clock duration | `55.745s` |
+| Records per second | `18.11` |
+| Segments per second | `36.21` |
+| Batch count | 112 |
+| Flush count | 4 |
+| Retry count | 0 |
+| Failure count | 0 |
+| Checkpoint after completion | removed |
+| Isolation | temporary positive `novelId`, cleaned from all Milvus collections |
+
+- environment: Windows 11 Home Chinese Edition `10.0.26200`, i5-13500H, 12 physical cores / 16 logical processors, `15.73 GiB` visible memory, Java `17.0.12`, Maven `3.9.9`
+- dependencies: local MySQL `8.0.46`, cloud Milvus, SiliconFlow `BAAI/bge-m3` with dimension `1024`
+- configuration: batch size `18`, max retries `3`, retry backoff `1000ms`
+- dataset: deterministic schema-aligned synthetic Chinese writing-memory corpus, five scenarios with `200` records each; generator is `scripts/generate-representative-import-dataset.ps1`
+- evidence: `docs/benchmarks/import-benchmark-representative-live-20260811.json`
+- interpretation: this is a bounded pinned-host operational baseline. It closes the source-controlled evidence task, but it is not a 50K production capacity claim because the corpus is synthetic and the host is a developer workstation.
 
 ## Token Cost Governance Baseline
 

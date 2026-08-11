@@ -87,6 +87,8 @@ src/main                   Application source and resources
 src/test                   Tests
 scripts/smoke-test.ps1      Local health and cost smoke check
 scripts/run-rag-evaluation.ps1  Reproducible API-backed RAG report
+scripts/run-import-benchmark.ps1  Isolated import throughput benchmark
+scripts/generate-representative-import-dataset.ps1  Deterministic benchmark corpus generator
 docs/PROJECT_DETAILS.md    Product details and API examples
 docs/DATAFLOW.md           Data flow notes
 docs/ROADMAP.md            Project roadmap
@@ -188,7 +190,8 @@ For an environment-backed retrieval report, run `scripts/run-rag-evaluation.ps1`
 
 ## Current Limitations
 
-- Larger Milvus throughput and capacity claims still require an environment-backed benchmark run; the 15-query Chinese retrieval baseline is recorded in `docs/BENCHMARK_REPORT.md`.
+- A pinned Win11 host baseline for 1,000 schema-aligned Chinese writing-memory records is recorded in `docs/BENCHMARK_REPORT.md`; it is not a 50K production capacity claim.
+- A production capacity claim still requires a representative real corpus and the target deployment host specification.
 - Exact provider-side token usage depends on whether the upstream model API returns usage metadata.
 - Outline-only degradation preserves product usability but is not a substitute for full literary generation.
 - Generic agent orchestration remains outside this repository by design.

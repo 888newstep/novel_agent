@@ -1,0 +1,61 @@
+{
+  "benchmarkId": "IMPORT-LIVE-20260811-PINNED-REPRESENTATIVE",
+  "date": "2026-08-11",
+  "status": "verified",
+  "inputFormat": "json_lines",
+  "sourceRecordCount": 1000,
+  "importedRecordCount": 1000,
+  "segmentCount": 2000,
+  "serviceDurationMs": 55227,
+  "wallClockDurationMs": 55745,
+  "recordsPerSecond": 18.11,
+  "segmentsPerSecond": 36.21,
+  "batchCount": 112,
+  "flushCount": 4,
+  "retryCount": 0,
+  "failureCount": 0,
+  "checkpointExistsAfterCompletion": false,
+  "cleanupSucceeded": true,
+  "environment": {
+    "os": "Windows 11 Home Chinese Edition",
+    "osVersion": "10.0.26200",
+    "cpu": "13th Gen Intel(R) Core(TM) i5-13500H",
+    "physicalCores": 12,
+    "logicalProcessors": 16,
+    "visibleMemoryGiB": 15.73,
+    "java": "17.0.12",
+    "maven": "3.9.9",
+    "mysql": "local MySQL 8.0.46",
+    "milvus": "cloud Milvus",
+    "embeddingProvider": "SiliconFlow",
+    "embeddingModel": "BAAI/bge-m3",
+    "embeddingDimension": 1024,
+    "batchSize": 18,
+    "maxRetries": 3,
+    "retryBackoffMs": 1000
+  },
+  "dataset": {
+    "generation": "deterministic scenario-balanced synthetic Chinese writing-memory corpus",
+    "generator": "scripts/generate-representative-import-dataset.ps1",
+    "scenarioCounts": {
+      "character_profile": 200,
+      "unresolved_event": 200,
+      "world_setting": 200,
+      "item_skill": 200,
+      "prewriting_context": 200
+    },
+    "segmentsPerRecord": 2,
+    "representativeScope": "vertical writing-memory schema and language distribution; not production source text"
+  },
+  "isolation": {
+    "mode": "temporary positive novelId",
+    "sharedNovelIdModified": false,
+    "temporaryNovelVectorsRemoved": true
+  },
+  "caveats": [
+    "This is a pinned-host, schema-aligned operational baseline, not a 50K-record capacity claim.",
+    "The corpus is deterministic synthetic data because the local MySQL instance contained no business novel or chapter rows at benchmark time.",
+    "Production capacity still requires a representative real corpus and the target deployment host specification.",
+    "Redis and RabbitMQ were available in the environment but are not on this repository's import critical path."
+  ]
+}

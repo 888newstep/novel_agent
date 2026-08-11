@@ -1,6 +1,6 @@
 # `novel_agent` Changelog For Interview
 
-Updated: 2026-08-10
+Updated: 2026-08-11
 
 ## Purpose
 
@@ -202,3 +202,12 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - result: `GET /actuator/prometheus` now exposes dashboard-ready RAG signals without putting `novelId`, query text, retrieved content, or credentials into metric labels
 - tradeoff: counters and timers are process-local and reset on JVM restart; Prometheus must scrape the endpoint for durable time-series history, while MySQL restores latest gauges
 - evidence: `src/main/java/com/novel/agent/service/RagEvaluationMetrics.java`, `src/test/java/com/novel/agent/service/RagEvaluationMetricsTest.java`, `docs/OBSERVABILITY.md`, and `src/main/resources/application.yml`
+
+### 2026-08-11 (pinned-host representative import benchmark)
+
+- topic: bounded import throughput evidence on a recorded host
+- problem: the previous 600-record run proved isolation and cleanup but did not record a host specification or balanced writing-domain corpus
+- change: added a deterministic five-scenario Chinese writing-memory corpus generator and replayed 1,000 records through the isolated import endpoint with temporary `novelId` cleanup
+- result: 1,000 records produced 2,000 segments in `55.227s` service time at `18.11 records/s` and `36.21 segments/s`, with `0` retries, `0` failures, `4` flushes, and successful cleanup
+- tradeoff: the corpus is schema-aligned synthetic data and the host is a developer workstation; the result is a bounded operational baseline, not a 50K production capacity claim
+- evidence: `scripts/generate-representative-import-dataset.ps1`, `scripts/run-import-benchmark.ps1`, `docs/benchmarks/import-benchmark-representative-live-20260811.json`, and `docs/BENCHMARK_REPORT.md`
