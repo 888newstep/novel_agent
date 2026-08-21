@@ -76,7 +76,7 @@ public class AiModelConfig {
                 .apiKey(config.getApiKey())
                 .modelName(config.getModelName())
                 .temperature(0.8)
-                .maxTokens(4096)
+                .maxTokens(maxOutputTokens())
                 .timeout(Duration.ofSeconds(120))
                 .build();
     }
@@ -87,7 +87,7 @@ public class AiModelConfig {
                 .apiKey(config.getApiKey())
                 .modelName(config.getModelName())
                 .temperature(0.8)
-                .maxTokens(4096)
+                .maxTokens(maxOutputTokens())
                 .timeout(Duration.ofSeconds(120))
                 .build();
     }
@@ -100,7 +100,7 @@ public class AiModelConfig {
                 .apiKey(config.getApiKey())
                 .modelName(config.getModelName())
                 .temperature(0.8)
-                .maxTokens(4096)
+                .maxTokens(maxOutputTokens())
                 .timeout(Duration.ofSeconds(120))
                 .build();
     }
@@ -111,7 +111,7 @@ public class AiModelConfig {
                 .apiKey(config.getApiKey())
                 .modelName(config.getModelName())
                 .temperature(0.8)
-                .maxTokens(4096)
+                .maxTokens(maxOutputTokens())
                 .timeout(Duration.ofSeconds(120))
                 .build();
     }
@@ -124,7 +124,7 @@ public class AiModelConfig {
                 .apiKey(config.getApiKey())
                 .modelName(config.getModelName())
                 .temperature(0.8)
-                .maxTokens(2048)
+                .maxTokens(maxOutputTokens())
                 .timeout(Duration.ofSeconds(120))
                 .build();
     }
@@ -135,9 +135,13 @@ public class AiModelConfig {
                 .apiKey(config.getApiKey())
                 .modelName(config.getModelName())
                 .temperature(0.8)
-                .maxTokens(2048)
+                .maxTokens(maxOutputTokens())
                 .timeout(Duration.ofSeconds(120))
                 .build();
+    }
+
+    private int maxOutputTokens() {
+        return Math.max(1, aiProperties.getCostControl().getReservedCompletionTokens());
     }
 
     

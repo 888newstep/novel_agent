@@ -2,8 +2,9 @@ package com.novel.agent.controller;
 
 import com.novel.agent.service.DataImportService;
 import com.novel.agent.service.MilvusAdminService;
-import lombok.RequiredArgsConstructor;
+import com.novel.agent.security.FileAccessPolicy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -13,46 +14,53 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 @RestController
 @RequestMapping("/api/import")
-@RequiredArgsConstructor
 @Slf4j
 public class DataImportController {
 
     private final DataImportService dataImportService;
     private final MilvusAdminService milvusAdminService;
+    private final FileAccessPolicy fileAccessPolicy;
+    private final Executor localTaskExecutor;
+
+    public DataImportController(
+            DataImportService dataImportService,
+            MilvusAdminService milvusAdminService,
+            FileAccessPolicy fileAccessPolicy,
+            @Qualifier("localTaskExecutor") Executor localTaskExecutor) {
+        this.dataImportService = dataImportService;
+        this.milvusAdminService = milvusAdminService;
+        this.fileAccessPolicy = fileAccessPolicy;
+        this.localTaskExecutor = localTaskExecutor;
+    }
 
     @PostMapping("/training-data")
     public Map<String, Object> importTrainingData(
             @RequestParam(defaultValue = "E:\\AI新质力\\网文数据集\\novel_cn_token512_50k.json") String filePath) {
 
-        if (dataImportService.isRunning()) {
-            return Map.of(
-                    "success", false,
-                    "message", "导入任务正在运行中，请先查询进度",
-                    "status", dataImportService.getImportStatus()
-            );
+        String validatedFilePath = validateFilePath(filePath);
+        if (validatedFilePath == null) {
+            return Map.of("success", false, "message", "file path is not allowed");
         }
-
-        CompletableFuture.runAsync(() -> {
-            try {
-                DataImportService.ImportResult result = dataImportService.importFromJson(filePath);
-                System.out.println("==============================================");
-                System.out.println("训练数据导入完成，结果: " + result);
-                System.out.println("请调用 POST /api/admin/milvus/build-index 构建索引");
-                System.out.println("然后调用 POST /api/admin/milvus/load 加载集合");
-                System.out.println("==============================================");
-            } catch (Exception e) {
-                System.err.println("导入失败: " + e.getMessage());
-            }
-        });
-
-        return Map.of(
-                "success", true,
-                "message", "导入任务已异步启动，请调用 /api/import/progress 或 /api/import/status 查看进度",
-                "status", dataImportService.getImportStatus()
+        if (!dataImportService.tryAcquireImportSlot()) {
+            return importResponse(false, null, "导入任务正在运行中，请先查询进度");
+        }
+        return scheduleImport(
+                validatedFilePath,
+                0L,
+                null,
+                "training data import",
+                "已有本地维护任务正在运行，请稍后重试",
+                "导入任务已异步启动，请调用 /api/import/progress 或 /api/import/status 查看进度",
+                () -> {
+                    DataImportService.ImportResult result =
+                            dataImportService.importFromJsonAfterReservation(validatedFilePath, 0L);
+                    log.info("Training data import completed: {}. Call POST /api/v1/novel/admin/milvus/finalize to rebuild Milvus.", result);
+                }
         );
     }
 
@@ -63,27 +71,21 @@ public class DataImportController {
         if (novelId < 0) {
             return Map.of("success", false, "message", "novelId must be non-negative");
         }
-        if (dataImportService.isRunning()) {
-            return Map.of(
-                    "success", false,
-                    "message", "import task is already running",
-                    "status", dataImportService.getImportStatus()
-            );
+        String validatedNovelFilePath = validateFilePath(filePath);
+        if (validatedNovelFilePath == null) {
+            return Map.of("success", false, "message", "file path is not allowed");
         }
-
-        CompletableFuture.runAsync(() -> {
-            try {
-                dataImportService.importFromJson(filePath, novelId);
-            } catch (Exception ex) {
-                log.error("isolated import failed, novelId={}, filePath={}", novelId, filePath, ex);
-            }
-        });
-
-        return Map.of(
-                "success", true,
-                "novelId", novelId,
-                "message", "isolated import task started",
-                "status", dataImportService.getImportStatus()
+        if (!dataImportService.tryAcquireImportSlot()) {
+            return importResponse(false, novelId, "import task is already running");
+        }
+        return scheduleImport(
+                validatedNovelFilePath,
+                novelId,
+                novelId,
+                "isolated import, novelId=" + novelId,
+                "已有本地维护任务正在运行，请稍后重试",
+                "isolated import task started",
+                () -> dataImportService.importFromJsonAfterReservation(validatedNovelFilePath, novelId)
         );
     }
 
@@ -123,11 +125,12 @@ public class DataImportController {
             return Map.of("success", false, "message", "导入任务仍在运行，请先等待完成");
         }
 
-        CompletableFuture.runAsync(() -> {
-            milvusAdminService.flushAll();
-            milvusAdminService.buildAllIndexesAsync();
-            milvusAdminService.loadAllCollections();
-        });
+        if (!submitTask("Milvus finalize", milvusAdminService::finalizeRebuild)) {
+            return Map.of(
+                    "success", false,
+                    "message", "已有本地维护任务正在运行，请稍后重试"
+            );
+        }
 
         return Map.of(
                 "success", true,
@@ -146,6 +149,60 @@ public class DataImportController {
             return Long.parseLong(value.toString());
         } catch (NumberFormatException ex) {
             return 0L;
+        }
+    }
+
+    private String validateFilePath(String filePath) {
+        try {
+            return fileAccessPolicy.requireAllowedRegularFile(filePath).toString();
+        } catch (IllegalArgumentException exception) {
+            log.warn("Rejected import file path: {}", exception.getMessage());
+            return null;
+        }
+    }
+
+    private Map<String, Object> scheduleImport(String filePath,
+                                                long novelId,
+                                                Long responseNovelId,
+                                                String taskName,
+                                                String rejectedMessage,
+                                                String acceptedMessage,
+                                                Runnable task) {
+        dataImportService.markImportScheduled(filePath, novelId);
+        if (!submitTask(taskName, task)) {
+            dataImportService.releaseReservedImportSlot();
+            return importResponse(false, responseNovelId, rejectedMessage);
+        }
+        return importResponse(true, responseNovelId, acceptedMessage);
+    }
+
+    private Map<String, Object> importResponse(boolean success,
+                                               Long novelId,
+                                               String message) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", success);
+        if (novelId != null) {
+            response.put("novelId", novelId);
+        }
+        response.put("message", message);
+        response.put("status", dataImportService.getImportStatus());
+        return response;
+    }
+
+    private boolean submitTask(String taskName, Runnable task) {
+        try {
+            localTaskExecutor.execute(() -> {
+                try {
+                    task.run();
+                    log.info("Local task completed: {}", taskName);
+                } catch (Exception ex) {
+                    log.error("Local task failed: {}", taskName, ex);
+                }
+            });
+            return true;
+        } catch (RejectedExecutionException ex) {
+            log.warn("Local task rejected because another task is running: {}", taskName);
+            return false;
         }
     }
 }

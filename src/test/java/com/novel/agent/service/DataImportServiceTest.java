@@ -67,7 +67,7 @@ class DataImportServiceTest {
         ArgumentCaptor<DeleteReq> deleteCaptor = ArgumentCaptor.forClass(DeleteReq.class);
         verify(milvusClient, times(2)).insert(any(InsertReq.class));
         verify(milvusClient).delete(deleteCaptor.capture());
-        verify(embeddingService, times(2)).batchGenerateEmbedding(anyList());
+        verify(embeddingService, times(1)).batchGenerateEmbedding(anyList());
         assertThat(deleteCaptor.getValue().getCollectionName()).isEqualTo("novel_segments");
         assertThat(deleteCaptor.getValue().getFilter()).isEqualTo("novel_id == 0 && chapter_num >= 1 && chapter_num <= 1");
     }
@@ -102,7 +102,32 @@ class DataImportServiceTest {
 
         verify(milvusClient, times(2)).insert(any(InsertReq.class));
         verify(milvusClient, times(1)).delete(any(DeleteReq.class));
+        verify(embeddingService, times(1)).batchGenerateEmbedding(anyList());
+    }
+
+    @Test
+    void regeneratesEmbeddingWhenEmbeddingGenerationItselfFails(@TempDir Path tempDir) throws Exception {
+        MilvusClientV2 milvusClient = mock(MilvusClientV2.class);
+        EmbeddingService embeddingService = mock(EmbeddingService.class);
+        DataImportService service = new DataImportService(milvusClient, embeddingService);
+        configure(service, 1, 2, 0L);
+
+        Path dataset = tempDir.resolve("dataset.jsonl");
+        Files.writeString(dataset, """
+                {"instruction":"write","input":"scene","output":"continuation"}
+                """);
+        when(embeddingService.batchGenerateEmbedding(anyList()))
+                .thenThrow(new RuntimeException("embedding failed once"))
+                .thenReturn(List.of(List.of(0.1f, 0.2f), List.of(0.3f, 0.4f)));
+        when(milvusClient.insert(any(InsertReq.class))).thenReturn(mock(InsertResp.class));
+        when(milvusClient.delete(any(DeleteReq.class))).thenReturn(mock(DeleteResp.class));
+
+        DataImportService.ImportResult result = service.importFromJson(dataset.toString());
+
+        assertThat(result.successCount).isEqualTo(2L);
+        assertThat(result.retryCount).isEqualTo(1L);
         verify(embeddingService, times(2)).batchGenerateEmbedding(anyList());
+        verify(milvusClient, times(1)).insert(any(InsertReq.class));
     }
 
     @Test
@@ -143,6 +168,38 @@ class DataImportServiceTest {
                 .isEqualTo("novel_id == 42 && chapter_num >= 1 && chapter_num <= 1");
         assertThat(String.valueOf(insertCaptor.getAllValues().get(1).getData()))
                 .contains("\"novel_id\":42");
+    }
+
+    @Test
+    void usesSharedBatchPipelineForJsonArray(@TempDir Path tempDir) throws Exception {
+        MilvusClientV2 milvusClient = mock(MilvusClientV2.class);
+        EmbeddingService embeddingService = mock(EmbeddingService.class);
+        DataImportService service = new DataImportService(milvusClient, embeddingService);
+        configure(service, 1, 2, 0L);
+
+        Path dataset = tempDir.resolve("dataset.json");
+        Files.writeString(dataset, """
+                [
+                  {"instruction":"write","input":"scene one","output":"continuation one"},
+                  {"instruction":"write","input":"scene two","output":"continuation two"}
+                ]
+                """);
+
+        when(embeddingService.batchGenerateEmbedding(anyList())).thenReturn(List.of(
+                List.of(0.1f, 0.2f),
+                List.of(0.3f, 0.4f)
+        ));
+        when(milvusClient.insert(any(InsertReq.class))).thenReturn(mock(InsertResp.class));
+
+        DataImportService.ImportResult result = service.importFromJson(dataset.toString());
+
+        assertThat(result.successCount).isEqualTo(4L);
+        assertThat(result.totalProcessed).isEqualTo(4L);
+        assertThat(result.batchCount).isEqualTo(2);
+        assertThat(result.flushCount).isEqualTo(1);
+        assertThat(service.getImportStatus().get("stage")).isEqualTo("completed");
+        verify(embeddingService, times(2)).batchGenerateEmbedding(anyList());
+        verify(milvusClient, times(2)).insert(any(InsertReq.class));
     }
 
     @Test

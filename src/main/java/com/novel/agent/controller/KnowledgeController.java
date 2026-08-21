@@ -2,10 +2,13 @@ package com.novel.agent.controller;
 
 import com.novel.agent.service.KnowledgeBatchProcessor;
 import com.novel.agent.service.KnowledgeSearchService;
+import com.novel.agent.security.FileAccessPolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -17,6 +20,10 @@ public class KnowledgeController {
 
     private final KnowledgeBatchProcessor batchProcessor;
     private final KnowledgeSearchService searchService;
+    private final FileAccessPolicy fileAccessPolicy;
+
+    @Value("${knowledge.novel-dir:novels/}")
+    private String novelDir;
 
     @PostMapping("/process")
     public Map<String, Object> processAll() {
@@ -33,9 +40,15 @@ public class KnowledgeController {
 
     @PostMapping("/process/{fileName}")
     public Map<String, Object> processFile(@PathVariable String fileName) {
-        log.info("Knowledge file processing requested, fileName={}", fileName);
-        KnowledgeBatchProcessor.ProcessFileResult result = batchProcessor.processFile(
-                java.nio.file.Paths.get("novels/" + fileName));
+        Path safePath;
+        try {
+            safePath = fileAccessPolicy.requireAllowedFileName(novelDir, fileName);
+        } catch (IllegalArgumentException exception) {
+            log.warn("Rejected knowledge file path: {}", exception.getMessage());
+            return Map.of("success", false, "message", "file path is not allowed");
+        }
+        log.info("Knowledge file processing requested, fileName={}", safePath.getFileName());
+        KnowledgeBatchProcessor.ProcessFileResult result = batchProcessor.processFile(safePath);
         return Map.of(
                 "success", true,
                 "totalSegments", result.totalSegments,

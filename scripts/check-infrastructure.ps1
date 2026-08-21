@@ -7,14 +7,6 @@ param(
     [string]$MilvusHost,
     [ValidateRange(1, 65535)]
     [int]$MilvusPort = 19530,
-    [string]$RedisHost,
-    [ValidateRange(1, 65535)]
-    [int]$RedisPort = 6379,
-    [string]$RabbitMqHost,
-    [ValidateRange(1, 65535)]
-    [int]$RabbitMqAmqpPort = 5672,
-    [ValidateRange(1, 65535)]
-    [int]$RabbitMqManagementPort = 15672,
     [string]$EmbeddingBaseUrl,
     [switch]$SkipEmbedding,
     [switch]$CheckApplication,
@@ -278,8 +270,6 @@ function Add-ApplicationHealthCheck {
 $dotEnvValues = Read-DotEnv -Path $EnvFilePath
 $MySqlHost = Resolve-ConfigValue -ExplicitValue $MySqlHost -Name 'MYSQL_HOST' -Fallback 'localhost' -DotEnvValues $dotEnvValues
 $MilvusHost = Resolve-ConfigValue -ExplicitValue $MilvusHost -Name 'MILVUS_HOST' -Fallback '127.0.0.1' -DotEnvValues $dotEnvValues
-$RedisHost = Resolve-ConfigValue -ExplicitValue $RedisHost -Name 'REDIS_HOST' -Fallback 'localhost' -DotEnvValues $dotEnvValues
-$RabbitMqHost = Resolve-ConfigValue -ExplicitValue $RabbitMqHost -Name 'RABBITMQ_HOST' -Fallback '' -DotEnvValues $dotEnvValues
 $EmbeddingBaseUrl = Resolve-ConfigValue -ExplicitValue $EmbeddingBaseUrl -Name 'EMBEDDING_BASE_URL' -Fallback 'https://api.siliconflow.cn/v1' -DotEnvValues $dotEnvValues
 
 $script:results = @()
@@ -290,15 +280,6 @@ if ($SkipEmbedding) {
     Add-SkippedCheck -Name 'embedding-provider' -Component 'required-for-rag/import' -Reason 'skipped by -SkipEmbedding'
 } else {
     Add-HttpCheck -Name 'embedding-provider' -Component 'required-for-rag/import' -Uri $EmbeddingBaseUrl -Required $true
-}
-
-Add-TcpCheck -Name 'redis' -Component 'optional-currently-unused' -TargetHost $RedisHost -Port $RedisPort -Required $false
-if ([string]::IsNullOrWhiteSpace($RabbitMqHost)) {
-    Add-SkippedCheck -Name 'rabbitmq-amqp' -Component 'optional-currently-unused' -Reason 'RABBITMQ_HOST was not configured'
-    Add-SkippedCheck -Name 'rabbitmq-management' -Component 'optional-currently-unused' -Reason 'RABBITMQ_HOST was not configured'
-} else {
-    Add-TcpCheck -Name 'rabbitmq-amqp' -Component 'optional-currently-unused' -TargetHost $RabbitMqHost -Port $RabbitMqAmqpPort -Required $false
-    Add-TcpCheck -Name 'rabbitmq-management' -Component 'optional-currently-unused' -TargetHost $RabbitMqHost -Port $RabbitMqManagementPort -Required $false
 }
 
 if ($CheckApplication) {

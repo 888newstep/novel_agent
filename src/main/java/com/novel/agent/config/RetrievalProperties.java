@@ -19,12 +19,15 @@ public class RetrievalProperties {
         private int efSearch = 64;
         private int defaultFetchMultiplier = 2;
         private int maxQueryVariants = 3;
+        private int maxQueryChars = 240;
+        private int maxTotalQueryChars = 480;
         private int perChapterSegmentLimit = 1;
         private int perChapterEventLimit = 1;
     }
 
     @Data
     public static class Memory {
+        private int promptTokenBudget = 1600;
         private int recentChapterLimit = 3;
         private int segmentLimit = 3;
         private int hookLimit = 2;

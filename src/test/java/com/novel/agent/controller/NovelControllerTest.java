@@ -1,5 +1,6 @@
 package com.novel.agent.controller;
 
+import com.novel.agent.config.RetrievalProperties;
 import com.novel.agent.entity.Artifact;
 import com.novel.agent.entity.ItemLog;
 import com.novel.agent.entity.KeyEvent;
@@ -18,6 +19,7 @@ import com.novel.agent.service.MilvusSearchService;
 import com.novel.agent.service.MilvusService;
 import com.novel.agent.service.TokenCostService;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.ResponseEntity;
 
 import java.util.LinkedHashMap;
@@ -29,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class NovelControllerTest {
@@ -48,7 +51,8 @@ class NovelControllerTest {
                 mock(MilvusService.class),
                 mock(MilvusSearchService.class),
                 mock(MilvusAdminService.class),
-                mock(TokenCostService.class)
+                mock(TokenCostService.class),
+                new RetrievalProperties()
         );
 
         MilvusSearchService milvusSearchService = extractSearchService(controller);
@@ -128,7 +132,8 @@ class NovelControllerTest {
                 mock(MilvusService.class),
                 milvusSearchService,
                 mock(MilvusAdminService.class),
-                tokenCostService
+                tokenCostService,
+                new RetrievalProperties()
         );
 
         Novel novel = Novel.builder().id(2L).worldSetting("cultivation dynasty").build();
@@ -142,7 +147,7 @@ class NovelControllerTest {
                 .segments(List.of(
                         mapOf("chapter_num", 10, "segment_type", "dialogue", "content", "segment one"),
                         mapOf("chapter_num", 10, "segment_type", "battle", "content", "segment two"),
-                        mapOf("chapter_num", 10, "segment_type", "battle", "content", "segment three"),
+                        mapOf("chapter_num", 10, "segment_type", "battle", "content", "segment two"),
                         mapOf("chapter_num", 10, "segment_type", "emotion", "content", "segment four")
                 ))
                 .hooks(List.of(
@@ -255,6 +260,13 @@ class NovelControllerTest {
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(response.getBody()).containsKeys("content", "memoryLayers", "consistencyCheck", "generationTrace", "postGenerationCheck");
 
+        ArgumentCaptor<String> systemPromptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(deepSeekService).chat(eq(2L), systemPromptCaptor.capture(), anyString());
+        String submittedSystemPrompt = systemPromptCaptor.getValue();
+        assertThat(submittedSystemPrompt).doesNotContain("????");
+        assertThat(submittedSystemPrompt.split("segment two", -1)).hasSize(2);
+        assertThat(submittedSystemPrompt).contains("segment four");
+
         @SuppressWarnings("unchecked")
         Map<String, Object> generationTrace = (Map<String, Object>) response.getBody().get("generationTrace");
         @SuppressWarnings("unchecked")
@@ -263,6 +275,16 @@ class NovelControllerTest {
         Map<String, Object> sceneSegments = (Map<String, Object>) selectedBlocks.get("sceneSegments");
         assertThat(sceneSegments.get("usedInPrompt")).isEqualTo(3);
         assertThat(sceneSegments.get("omittedCount")).isEqualTo(1);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> promptBudget = (Map<String, Object>) generationTrace.get("promptBudget");
+        assertThat((Integer) promptBudget.get("estimatedInputTokens"))
+                .isLessThanOrEqualTo((Integer) promptBudget.get("inputTokenBudget"));
+        assertThat((Integer) promptBudget.get("candidateMemoryTokens"))
+                .isGreaterThan((Integer) promptBudget.get("selectedMemoryTokens"));
+        assertThat((Integer) promptBudget.get("savedMemoryTokens")).isPositive();
+        assertThat(promptBudget.get("duplicateDroppedCount")).isEqualTo(1);
+        assertThat((Integer) promptBudget.get("limitDroppedCount")).isPositive();
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> droppedCandidates = (List<Map<String, Object>>) generationTrace.get("droppedCandidates");
@@ -326,6 +348,72 @@ class NovelControllerTest {
 
 
     @Test
+    void promptOmitsMemoryFactAlreadyCoveredByWorldSetting() {
+        NovelRepository novelRepository = mock(NovelRepository.class);
+        MilvusSearchService milvusSearchService = mock(MilvusSearchService.class);
+        DeepSeekService deepSeekService = mock(DeepSeekService.class);
+        TokenCostService tokenCostService = mock(TokenCostService.class);
+        NovelController controller = new NovelController(
+                novelRepository,
+                mock(ChapterRepository.class),
+                mock(KeyEventRepository.class),
+                mock(InspirationRepository.class),
+                mock(CharacterRepository.class),
+                mock(ArtifactRepository.class),
+                mock(SkillRepository.class),
+                mock(ItemLogRepository.class),
+                deepSeekService,
+                mock(MilvusService.class),
+                milvusSearchService,
+                mock(MilvusAdminService.class),
+                tokenCostService,
+                new RetrievalProperties()
+        );
+
+        Novel novel = Novel.builder().id(8L).worldSetting("Azure Peak controls the outer mountain").build();
+        MilvusSearchService.WritingMemory memory = MilvusSearchService.WritingMemory.builder()
+                .query("mountain trial")
+                .currentChapterNum(4)
+                .recentChapters(List.of())
+                .segments(List.of())
+                .hooks(List.of())
+                .characters(List.of())
+                .items(List.of())
+                .factions(List.of(Map.of("title", "Azure Peak", "content", "controls the outer mountain")))
+                .relations(List.of())
+                .totalCount(1)
+                .build();
+        TokenCostService.SettingsSnapshot settings = TokenCostService.SettingsSnapshot.builder()
+                .enabled(true)
+                .strictMode(false)
+                .reservedCompletionTokens(1200)
+                .maxEstimatedTokensPerRequest(12000)
+                .build();
+
+        when(novelRepository.findById(8L)).thenReturn(Optional.of(novel));
+        when(milvusSearchService.buildWritingMemory(8L, "mountain trial", 4)).thenReturn(memory);
+        when(deepSeekService.chat(eq(8L), anyString(), anyString())).thenReturn("chapter");
+        when(tokenCostService.getSettingsSnapshot()).thenReturn(settings);
+        when(tokenCostService.estimateTokens(anyString())).thenAnswer(invocation -> {
+            String text = invocation.getArgument(0, String.class);
+            return Math.max(1, text.length() / 4);
+        });
+
+        ResponseEntity<Map<String, Object>> response = controller.generateChapter(
+                8L, "mountain trial", "steady", "1A", 4);
+
+        ArgumentCaptor<String> systemPromptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(deepSeekService).chat(eq(8L), systemPromptCaptor.capture(), anyString());
+        assertThat(systemPromptCaptor.getValue()).contains("Azure Peak controls the outer mountain");
+        assertThat(systemPromptCaptor.getValue()).doesNotContain("[1] Azure Peak");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> trace = (Map<String, Object>) response.getBody().get("generationTrace");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> promptBudget = (Map<String, Object>) trace.get("promptBudget");
+        assertThat(promptBudget.get("duplicateDroppedCount")).isEqualTo(1);
+    }
+
+    @Test
     void generateChapterFallsBackToOutlineWhenBudgetIsBlocked() {
         NovelRepository novelRepository = mock(NovelRepository.class);
         ChapterRepository chapterRepository = mock(ChapterRepository.class);
@@ -354,7 +442,8 @@ class NovelControllerTest {
                 milvusService,
                 milvusSearchService,
                 milvusAdminService,
-                tokenCostService
+                tokenCostService,
+                new RetrievalProperties()
         );
 
         Novel novel = Novel.builder().id(3L).title("Budget Trial").worldSetting("sects and ruins").build();

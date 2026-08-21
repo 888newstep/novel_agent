@@ -181,32 +181,34 @@ public class MilvusSearchService {
     }
 
     public WritingMemory buildWritingMemory(Long novelId, String queryText, Integer currentChapterNum) {
-        List<Map<String, Object>> recentChapters = loadRecentChapters(novelId, currentChapterNum, retrievalProperties.getMemory().getRecentChapterLimit());
-        List<Map<String, Object>> segments = searchSegments(novelId, queryText, retrievalProperties.getMemory().getSegmentLimit() + 1, currentChapterNum);
-        List<Map<String, Object>> hooks = searchUnresolvedEvents(novelId, queryText, retrievalProperties.getMemory().getHookLimit() + 1, currentChapterNum);
-        List<Map<String, Object>> characters = searchCharacters(novelId, queryText, retrievalProperties.getMemory().getCharacterLimit());
-        List<Map<String, Object>> items = searchItems(novelId, queryText, retrievalProperties.getMemory().getItemLimit() + 1, null);
-        List<Map<String, Object>> factions = searchFactionOrInspiration(novelId, queryText, retrievalProperties.getMemory().getFactionLimit() + 1, 0);
-        List<Map<String, Object>> relations = loadRelatedRelations(novelId, queryText, characters, retrievalProperties.getMemory().getRelationLimit());
+        return embeddingService.withRequestCache(() -> {
+            List<Map<String, Object>> recentChapters = loadRecentChapters(novelId, currentChapterNum, retrievalProperties.getMemory().getRecentChapterLimit());
+            List<Map<String, Object>> segments = searchSegments(novelId, queryText, retrievalProperties.getMemory().getSegmentLimit() + 1, currentChapterNum);
+            List<Map<String, Object>> hooks = searchUnresolvedEvents(novelId, queryText, retrievalProperties.getMemory().getHookLimit() + 1, currentChapterNum);
+            List<Map<String, Object>> characters = searchCharacters(novelId, queryText, retrievalProperties.getMemory().getCharacterLimit());
+            List<Map<String, Object>> items = searchItems(novelId, queryText, retrievalProperties.getMemory().getItemLimit() + 1, null);
+            List<Map<String, Object>> factions = searchFactionOrInspiration(novelId, queryText, retrievalProperties.getMemory().getFactionLimit() + 1, 0);
+            List<Map<String, Object>> relations = loadRelatedRelations(novelId, queryText, characters, retrievalProperties.getMemory().getRelationLimit());
 
-        return WritingMemory.builder()
-                .query(queryText)
-                .currentChapterNum(currentChapterNum)
-                .recentChapters(limitResults(recentChapters, retrievalProperties.getMemory().getRecentChapterLimit()))
-                .segments(limitResults(segments, retrievalProperties.getMemory().getSegmentLimit()))
-                .hooks(limitResults(hooks, retrievalProperties.getMemory().getHookLimit()))
-                .characters(limitResults(characters, retrievalProperties.getMemory().getCharacterLimit()))
-                .items(limitResults(items, retrievalProperties.getMemory().getItemLimit()))
-                .factions(limitResults(factions, retrievalProperties.getMemory().getFactionLimit()))
-                .relations(limitResults(relations, retrievalProperties.getMemory().getRelationLimit()))
-                .totalCount(Math.min(recentChapters.size(), retrievalProperties.getMemory().getRecentChapterLimit())
-                        + Math.min(segments.size(), retrievalProperties.getMemory().getSegmentLimit())
-                        + Math.min(hooks.size(), retrievalProperties.getMemory().getHookLimit())
-                        + Math.min(characters.size(), retrievalProperties.getMemory().getCharacterLimit())
-                        + Math.min(items.size(), retrievalProperties.getMemory().getItemLimit())
-                        + Math.min(factions.size(), retrievalProperties.getMemory().getFactionLimit())
-                        + Math.min(relations.size(), retrievalProperties.getMemory().getRelationLimit()))
-                .build();
+            return WritingMemory.builder()
+                    .query(queryText)
+                    .currentChapterNum(currentChapterNum)
+                    .recentChapters(limitResults(recentChapters, retrievalProperties.getMemory().getRecentChapterLimit()))
+                    .segments(limitResults(segments, retrievalProperties.getMemory().getSegmentLimit()))
+                    .hooks(limitResults(hooks, retrievalProperties.getMemory().getHookLimit()))
+                    .characters(limitResults(characters, retrievalProperties.getMemory().getCharacterLimit()))
+                    .items(limitResults(items, retrievalProperties.getMemory().getItemLimit()))
+                    .factions(limitResults(factions, retrievalProperties.getMemory().getFactionLimit()))
+                    .relations(limitResults(relations, retrievalProperties.getMemory().getRelationLimit()))
+                    .totalCount(Math.min(recentChapters.size(), retrievalProperties.getMemory().getRecentChapterLimit())
+                            + Math.min(segments.size(), retrievalProperties.getMemory().getSegmentLimit())
+                            + Math.min(hooks.size(), retrievalProperties.getMemory().getHookLimit())
+                            + Math.min(characters.size(), retrievalProperties.getMemory().getCharacterLimit())
+                            + Math.min(items.size(), retrievalProperties.getMemory().getItemLimit())
+                            + Math.min(factions.size(), retrievalProperties.getMemory().getFactionLimit())
+                            + Math.min(relations.size(), retrievalProperties.getMemory().getRelationLimit()))
+                    .build();
+        });
     }
 
     private List<Map<String, Object>> hybridSearch(String collectionName,
@@ -221,7 +223,11 @@ public class MilvusSearchService {
                                                    Integer currentChapterNum,
                                                    boolean chapterAware,
                                                    int perChapterLimit) {
-        List<String> queryVariants = buildQueryVariants(queryText, expansionHint, currentChapterNum);
+        String boundedQuery = normalizeAndLimitQuery(queryText);
+        int originalQueryChars = queryText == null ? 0 : queryText.length();
+        boolean queryTruncated = originalQueryChars > boundedQuery.length();
+        List<String> queryVariants = buildQueryVariants(boundedQuery, expansionHint, currentChapterNum);
+        int queryVariantChars = queryVariants.stream().mapToInt(String::length).sum();
         List<List<Float>> queryVectors = embeddingService.batchGenerateEmbedding(queryVariants);
         int fetchK = Math.max(topK * retrievalProperties.getSearch().getDefaultFetchMultiplier(), topK + 2);
         Map<String, Map<String, Object>> merged = new LinkedHashMap<>();
@@ -257,12 +263,12 @@ public class MilvusSearchService {
                     .collect(Collectors.toList());
         }
 
-        List<String> keywords = extractKeywords(queryText);
+        List<String> keywords = extractKeywords(boundedQuery);
         long maxChapterNum = candidates.stream()
                 .mapToLong(item -> asLong(item.get("chapter_num")))
                 .max()
                 .orElse(0L);
-        String normalizedQuery = queryText == null ? "" : queryText.toLowerCase(Locale.ROOT);
+        String normalizedQuery = boundedQuery.toLowerCase(Locale.ROOT);
 
         for (Map<String, Object> item : candidates) {
             String combinedText = buildCombinedText(item, textFields);
@@ -329,7 +335,12 @@ public class MilvusSearchService {
             scoreBreakdown.put("finalScore", round(rankScore));
 
             Map<String, Object> recallTrace = new LinkedHashMap<>();
-            recallTrace.put("query", queryText == null ? "" : queryText);
+            recallTrace.put("query", boundedQuery);
+            recallTrace.put("originalQueryChars", originalQueryChars);
+            recallTrace.put("queryChars", boundedQuery.length());
+            recallTrace.put("queryTruncated", queryTruncated);
+            recallTrace.put("queryVariantCount", queryVariants.size());
+            recallTrace.put("queryVariantChars", queryVariantChars);
             recallTrace.put("currentChapterNum", currentChapterNum);
             recallTrace.put("chapterAware", chapterAware);
             recallTrace.put("matchedQueryVariants", List.copyOf(hitQueries));
@@ -366,12 +377,24 @@ public class MilvusSearchService {
 
         log.info("search [{}] query=[{}], chapter={}, variants={}, results={}, topScore={}",
                 collectionName,
-                queryText,
+                boundedQuery,
                 currentChapterNum,
                 queryVariants.size(),
                 limited.size(),
                 limited.isEmpty() ? 0D : asDouble(limited.get(0).get("rankScore")));
         return limited;
+    }
+
+    private String normalizeAndLimitQuery(String queryText) {
+        if (queryText == null || queryText.isBlank()) {
+            return "";
+        }
+        String normalized = queryText.trim().replaceAll("\\s+", " ");
+        int maxChars = Math.max(32, retrievalProperties.getSearch().getMaxQueryChars());
+        if (normalized.length() <= maxChars) {
+            return normalized;
+        }
+        return normalized.substring(0, maxChars).stripTrailing();
     }
 
     private Comparator<Map<String, Object>> rankComparator() {
@@ -569,7 +592,23 @@ public class MilvusSearchService {
             variants.add(baseQuery + " " + expansionHint);
         }
 
-        return variants.stream().limit(retrievalProperties.getSearch().getMaxQueryVariants()).collect(Collectors.toList());
+        int maxVariants = Math.max(1, retrievalProperties.getSearch().getMaxQueryVariants());
+        int maxTotalChars = Math.max(
+                Math.max(32, retrievalProperties.getSearch().getMaxQueryChars()),
+                retrievalProperties.getSearch().getMaxTotalQueryChars());
+        List<String> boundedVariants = new ArrayList<>();
+        int totalChars = 0;
+        for (String variant : variants) {
+            if (boundedVariants.size() >= maxVariants) {
+                break;
+            }
+            if (!boundedVariants.isEmpty() && totalChars + variant.length() > maxTotalChars) {
+                continue;
+            }
+            boundedVariants.add(variant);
+            totalChars += variant.length();
+        }
+        return boundedVariants;
     }
 
     private List<String> extractKeywords(String queryText) {

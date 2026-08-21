@@ -1,0 +1,229 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<jmeterTestPlan version='1.2' properties='5.0' jmeter='5.6.3'>
+  <hashTree>
+    <TestPlan guiclass='TestPlanGui' testclass='TestPlan' testname='novel-agent load test' enabled='true'>
+      <stringProp name='TestPlan.comments'>Safe default: health only. Enable other thread groups deliberately.</stringProp>
+      <boolProp name='TestPlan.functional_mode'>false</boolProp>
+      <boolProp name='TestPlan.serialize_threadgroups'>false</boolProp>
+      <elementProp name='TestPlan.user_defined_variables' elementType='Arguments'>
+        <collectionProp name='Arguments.arguments'/>
+      </elementProp>
+      <stringProp name='TestPlan.user_define_classpath'></stringProp>
+    </TestPlan>
+    <hashTree>
+      <ThreadGroup guiclass='ThreadGroupGui' testclass='ThreadGroup' testname='Health baseline' enabled='true'>
+        <stringProp name='ThreadGroup.on_sample_error'>continue</stringProp>
+        <elementProp name='ThreadGroup.main_controller' elementType='LoopController' guiclass='LoopControlPanel' testclass='LoopController' testname='Loop Controller' enabled='true'>
+          <boolProp name='LoopController.continue_forever'>false</boolProp>
+          <stringProp name='LoopController.loops'>${__P(healthLoops,5)}</stringProp>
+        </elementProp>
+        <stringProp name='ThreadGroup.num_threads'>${__P(healthThreads,10)}</stringProp>
+        <stringProp name='ThreadGroup.ramp_time'>${__P(healthRampSeconds,10)}</stringProp>
+        <longProp name='ThreadGroup.start_time'>0</longProp>
+        <longProp name='ThreadGroup.end_time'>0</longProp>
+        <boolProp name='ThreadGroup.scheduler'>false</boolProp>
+        <stringProp name='ThreadGroup.duration'></stringProp>
+        <stringProp name='ThreadGroup.delay'></stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HTTPSamplerProxy guiclass='HttpTestSampleGui' testclass='HTTPSamplerProxy' testname='GET health' enabled='true'>
+          <boolProp name='HTTPSampler.postBodyRaw'>false</boolProp>
+          <elementProp name='HTTPsampler.Arguments' elementType='Arguments' guiclass='HTTPArgumentsPanel' testclass='Arguments' testname='User Defined Variables'>
+            <collectionProp name='Arguments.arguments'/>
+          </elementProp>
+          <stringProp name='HTTPSampler.domain'>${__P(host,localhost)}</stringProp>
+          <stringProp name='HTTPSampler.port'>${__P(port,8080)}</stringProp>
+          <stringProp name='HTTPSampler.protocol'>http</stringProp>
+          <stringProp name='HTTPSampler.contentEncoding'>UTF-8</stringProp>
+          <stringProp name='HTTPSampler.path'>/api/v1/novel/health</stringProp>
+          <stringProp name='HTTPSampler.method'>GET</stringProp>
+          <boolProp name='HTTPSampler.follow_redirects'>true</boolProp>
+          <boolProp name='HTTPSampler.auto_redirects'>false</boolProp>
+          <boolProp name='HTTPSampler.use_keepalive'>true</boolProp>
+          <boolProp name='HTTPSampler.DO_MULTIPART_POST'>false</boolProp>
+          <stringProp name='HTTPSampler.embedded_url_re'></stringProp>
+          <stringProp name='HTTPSampler.connect_timeout'>5000</stringProp>
+          <stringProp name='HTTPSampler.response_timeout'>30000</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+
+      <ThreadGroup guiclass='ThreadGroupGui' testclass='ThreadGroup' testname='RAG search - enable deliberately' enabled='false'>
+        <stringProp name='ThreadGroup.on_sample_error'>continue</stringProp>
+        <elementProp name='ThreadGroup.main_controller' elementType='LoopController' guiclass='LoopControlPanel' testclass='LoopController' testname='Loop Controller' enabled='true'>
+          <boolProp name='LoopController.continue_forever'>false</boolProp>
+          <stringProp name='LoopController.loops'>${__P(ragLoops,1)}</stringProp>
+        </elementProp>
+        <stringProp name='ThreadGroup.num_threads'>${__P(ragThreads,5)}</stringProp>
+        <stringProp name='ThreadGroup.ramp_time'>${__P(ragRampSeconds,10)}</stringProp>
+        <longProp name='ThreadGroup.start_time'>0</longProp>
+        <longProp name='ThreadGroup.end_time'>0</longProp>
+        <boolProp name='ThreadGroup.scheduler'>false</boolProp>
+        <stringProp name='ThreadGroup.duration'></stringProp>
+        <stringProp name='ThreadGroup.delay'></stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HTTPSamplerProxy guiclass='HttpTestSampleGui' testclass='HTTPSamplerProxy' testname='POST search' enabled='true'>
+          <boolProp name='HTTPSampler.postBodyRaw'>false</boolProp>
+          <elementProp name='HTTPsampler.Arguments' elementType='Arguments' guiclass='HTTPArgumentsPanel' testclass='Arguments' testname='Request parameters'>
+            <collectionProp name='Arguments.arguments'>
+              <elementProp name='query' elementType='HTTPArgument'>
+                <boolProp name='HTTPArgument.always_encode'>true</boolProp>
+                <stringProp name='Argument.name'>query</stringProp>
+                <stringProp name='Argument.value'>${__P(query,continue scene)}</stringProp>
+                <stringProp name='HTTPArgument.value'></stringProp>
+                <boolProp name='HTTPArgument.use_equals'>true</boolProp>
+              </elementProp>
+              <elementProp name='topK' elementType='HTTPArgument'>
+                <boolProp name='HTTPArgument.always_encode'>true</boolProp>
+                <stringProp name='Argument.name'>topK</stringProp>
+                <stringProp name='Argument.value'>${__P(topK,5)}</stringProp>
+                <stringProp name='HTTPArgument.value'></stringProp>
+                <boolProp name='HTTPArgument.use_equals'>true</boolProp>
+              </elementProp>
+              <elementProp name='currentChapterNum' elementType='HTTPArgument'>
+                <boolProp name='HTTPArgument.always_encode'>true</boolProp>
+                <stringProp name='Argument.name'>currentChapterNum</stringProp>
+                <stringProp name='Argument.value'>${__P(currentChapterNum,1)}</stringProp>
+                <stringProp name='HTTPArgument.value'></stringProp>
+                <boolProp name='HTTPArgument.use_equals'>true</boolProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name='HTTPSampler.domain'>${__P(host,localhost)}</stringProp>
+          <stringProp name='HTTPSampler.port'>${__P(port,8080)}</stringProp>
+          <stringProp name='HTTPSampler.protocol'>http</stringProp>
+          <stringProp name='HTTPSampler.contentEncoding'>UTF-8</stringProp>
+          <stringProp name='HTTPSampler.path'>/api/v1/novel/${__P(novelId,0)}/search</stringProp>
+          <stringProp name='HTTPSampler.method'>POST</stringProp>
+          <boolProp name='HTTPSampler.follow_redirects'>true</boolProp>
+          <boolProp name='HTTPSampler.auto_redirects'>false</boolProp>
+          <boolProp name='HTTPSampler.use_keepalive'>true</boolProp>
+          <boolProp name='HTTPSampler.DO_MULTIPART_POST'>false</boolProp>
+          <stringProp name='HTTPSampler.embedded_url_re'></stringProp>
+          <stringProp name='HTTPSampler.connect_timeout'>5000</stringProp>
+          <stringProp name='HTTPSampler.response_timeout'>120000</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+
+      <ThreadGroup guiclass='ThreadGroupGui' testclass='ThreadGroup' testname='Writing memory - enable deliberately' enabled='false'>
+        <stringProp name='ThreadGroup.on_sample_error'>continue</stringProp>
+        <elementProp name='ThreadGroup.main_controller' elementType='LoopController' guiclass='LoopControlPanel' testclass='LoopController' testname='Loop Controller' enabled='true'>
+          <boolProp name='LoopController.continue_forever'>false</boolProp>
+          <stringProp name='LoopController.loops'>${__P(memoryLoops,1)}</stringProp>
+        </elementProp>
+        <stringProp name='ThreadGroup.num_threads'>${__P(memoryThreads,3)}</stringProp>
+        <stringProp name='ThreadGroup.ramp_time'>${__P(memoryRampSeconds,10)}</stringProp>
+        <longProp name='ThreadGroup.start_time'>0</longProp>
+        <longProp name='ThreadGroup.end_time'>0</longProp>
+        <boolProp name='ThreadGroup.scheduler'>false</boolProp>
+        <stringProp name='ThreadGroup.duration'></stringProp>
+        <stringProp name='ThreadGroup.delay'></stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HTTPSamplerProxy guiclass='HttpTestSampleGui' testclass='HTTPSamplerProxy' testname='GET writing memory' enabled='true'>
+          <boolProp name='HTTPSampler.postBodyRaw'>false</boolProp>
+          <elementProp name='HTTPsampler.Arguments' elementType='Arguments' guiclass='HTTPArgumentsPanel' testclass='Arguments' testname='Request parameters'>
+            <collectionProp name='Arguments.arguments'>
+              <elementProp name='query' elementType='HTTPArgument'>
+                <boolProp name='HTTPArgument.always_encode'>true</boolProp>
+                <stringProp name='Argument.name'>query</stringProp>
+                <stringProp name='Argument.value'>${__P(query,continue scene)}</stringProp>
+                <stringProp name='HTTPArgument.value'></stringProp>
+                <boolProp name='HTTPArgument.use_equals'>true</boolProp>
+              </elementProp>
+              <elementProp name='currentChapterNum' elementType='HTTPArgument'>
+                <boolProp name='HTTPArgument.always_encode'>true</boolProp>
+                <stringProp name='Argument.name'>currentChapterNum</stringProp>
+                <stringProp name='Argument.value'>${__P(currentChapterNum,1)}</stringProp>
+                <stringProp name='HTTPArgument.value'></stringProp>
+                <boolProp name='HTTPArgument.use_equals'>true</boolProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name='HTTPSampler.domain'>${__P(host,localhost)}</stringProp>
+          <stringProp name='HTTPSampler.port'>${__P(port,8080)}</stringProp>
+          <stringProp name='HTTPSampler.protocol'>http</stringProp>
+          <stringProp name='HTTPSampler.contentEncoding'>UTF-8</stringProp>
+          <stringProp name='HTTPSampler.path'>/api/v1/novel/${__P(novelId,0)}/memory</stringProp>
+          <stringProp name='HTTPSampler.method'>GET</stringProp>
+          <boolProp name='HTTPSampler.follow_redirects'>true</boolProp>
+          <boolProp name='HTTPSampler.auto_redirects'>false</boolProp>
+          <boolProp name='HTTPSampler.use_keepalive'>true</boolProp>
+          <boolProp name='HTTPSampler.DO_MULTIPART_POST'>false</boolProp>
+          <stringProp name='HTTPSampler.embedded_url_re'></stringProp>
+          <stringProp name='HTTPSampler.connect_timeout'>5000</stringProp>
+          <stringProp name='HTTPSampler.response_timeout'>120000</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+
+      <ThreadGroup guiclass='ThreadGroupGui' testclass='ThreadGroup' testname='Generation - disabled by default' enabled='false'>
+        <stringProp name='ThreadGroup.on_sample_error'>continue</stringProp>
+        <elementProp name='ThreadGroup.main_controller' elementType='LoopController' guiclass='LoopControlPanel' testclass='LoopController' testname='Loop Controller' enabled='true'>
+          <boolProp name='LoopController.continue_forever'>false</boolProp>
+          <stringProp name='LoopController.loops'>${__P(generationLoops,1)}</stringProp>
+        </elementProp>
+        <stringProp name='ThreadGroup.num_threads'>${__P(generationThreads,1)}</stringProp>
+        <stringProp name='ThreadGroup.ramp_time'>${__P(generationRampSeconds,10)}</stringProp>
+        <longProp name='ThreadGroup.start_time'>0</longProp>
+        <longProp name='ThreadGroup.end_time'>0</longProp>
+        <boolProp name='ThreadGroup.scheduler'>false</boolProp>
+        <stringProp name='ThreadGroup.duration'></stringProp>
+        <stringProp name='ThreadGroup.delay'></stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HTTPSamplerProxy guiclass='HttpTestSampleGui' testclass='HTTPSamplerProxy' testname='POST generate chapter' enabled='true'>
+          <boolProp name='HTTPSampler.postBodyRaw'>false</boolProp>
+          <elementProp name='HTTPsampler.Arguments' elementType='Arguments' guiclass='HTTPArgumentsPanel' testclass='Arguments' testname='Request parameters'>
+            <collectionProp name='Arguments.arguments'>
+              <elementProp name='topic' elementType='HTTPArgument'>
+                <boolProp name='HTTPArgument.always_encode'>true</boolProp>
+                <stringProp name='Argument.name'>topic</stringProp>
+                <stringProp name='Argument.value'>${__P(topic,load test topic)}</stringProp>
+                <stringProp name='HTTPArgument.value'></stringProp>
+                <boolProp name='HTTPArgument.use_equals'>true</boolProp>
+              </elementProp>
+              <elementProp name='style' elementType='HTTPArgument'>
+                <boolProp name='HTTPArgument.always_encode'>true</boolProp>
+                <stringProp name='Argument.name'>style</stringProp>
+                <stringProp name='Argument.value'>${__P(style,default)}</stringProp>
+                <stringProp name='HTTPArgument.value'></stringProp>
+                <boolProp name='HTTPArgument.use_equals'>true</boolProp>
+              </elementProp>
+              <elementProp name='promptId' elementType='HTTPArgument'>
+                <boolProp name='HTTPArgument.always_encode'>true</boolProp>
+                <stringProp name='Argument.name'>promptId</stringProp>
+                <stringProp name='Argument.value'>${__P(promptId,1A)}</stringProp>
+                <stringProp name='HTTPArgument.value'></stringProp>
+                <boolProp name='HTTPArgument.use_equals'>true</boolProp>
+              </elementProp>
+              <elementProp name='currentChapterNum' elementType='HTTPArgument'>
+                <boolProp name='HTTPArgument.always_encode'>true</boolProp>
+                <stringProp name='Argument.name'>currentChapterNum</stringProp>
+                <stringProp name='Argument.value'>${__P(currentChapterNum,1)}</stringProp>
+                <stringProp name='HTTPArgument.value'></stringProp>
+                <boolProp name='HTTPArgument.use_equals'>true</boolProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name='HTTPSampler.domain'>${__P(host,localhost)}</stringProp>
+          <stringProp name='HTTPSampler.port'>${__P(port,8080)}</stringProp>
+          <stringProp name='HTTPSampler.protocol'>http</stringProp>
+          <stringProp name='HTTPSampler.contentEncoding'>UTF-8</stringProp>
+          <stringProp name='HTTPSampler.path'>/api/v1/novel/${__P(novelId,0)}/generate</stringProp>
+          <stringProp name='HTTPSampler.method'>POST</stringProp>
+          <boolProp name='HTTPSampler.follow_redirects'>true</boolProp>
+          <boolProp name='HTTPSampler.auto_redirects'>false</boolProp>
+          <boolProp name='HTTPSampler.use_keepalive'>true</boolProp>
+          <boolProp name='HTTPSampler.DO_MULTIPART_POST'>false</boolProp>
+          <stringProp name='HTTPSampler.embedded_url_re'></stringProp>
+          <stringProp name='HTTPSampler.connect_timeout'>5000</stringProp>
+          <stringProp name='HTTPSampler.response_timeout'>180000</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

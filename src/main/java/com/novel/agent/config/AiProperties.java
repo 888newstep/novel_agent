@@ -52,6 +52,8 @@ public class AiProperties {
     @Data
     public static class Embedding {
         private String provider = "ollama";
+        private int cacheSize = 1024;
+        private int cacheMaxTextChars = 512;
         private OllamaEmbedding ollama = new OllamaEmbedding();
         private SiliconflowEmbedding siliconflow = new SiliconflowEmbedding();
     }

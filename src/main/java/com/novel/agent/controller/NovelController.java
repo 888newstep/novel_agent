@@ -1,9 +1,11 @@
 package com.novel.agent.controller;
 
+import com.novel.agent.config.RetrievalProperties;
 import com.novel.agent.entity.*;
 import com.novel.agent.exception.CostLimitExceededException;
 import com.novel.agent.repository.*;
 import com.novel.agent.service.DeepSeekService;
+import com.novel.agent.service.ChatPromptSupport;
 import com.novel.agent.service.MilvusAdminService;
 import com.novel.agent.service.MilvusSearchService;
 import com.novel.agent.service.MilvusService;
@@ -38,6 +40,7 @@ public class NovelController {
     private final MilvusSearchService milvusSearchService;
     private final MilvusAdminService milvusAdminService;
     private final TokenCostService tokenCostService;
+    private final RetrievalProperties retrievalProperties;
 
     // =============================================
     // 小说管理
@@ -91,82 +94,45 @@ public class NovelController {
         String worldSetting = novel != null ? novel.getWorldSetting() : "";
         MilvusSearchService.WritingMemory memory = milvusSearchService.buildWritingMemory(novelId, topic, currentChapterNum);
 
-        String systemPrompt = buildSystemPrompt(style, worldSetting, memory, promptId);
-        String userPrompt = String.format("??%s???????%s???????????", style, topic);
+        String promptStyle = trimText(style, 60);
+        String promptTopic = trimText(topic, 400);
+        String userPrompt = String.format("请以%s风格续写本章，主题：%s。直接输出正文。", promptStyle, promptTopic);
+        PromptAssembly promptAssembly = buildSystemPrompt(promptStyle, worldSetting, memory, promptId, userPrompt);
+        String systemPrompt = promptAssembly.prompt();
+        userPrompt = promptAssembly.userPrompt();
         TokenCostService.SettingsSnapshot settings = tokenCostService.getSettingsSnapshot();
+        GenerationContext context = new GenerationContext(
+                novelId,
+                topic,
+                style,
+                currentChapterNum,
+                promptId,
+                worldSetting,
+                memory,
+                systemPrompt,
+                userPrompt,
+                promptAssembly
+        );
 
         try {
             String generated = deepSeekService.chat(novelId, systemPrompt, userPrompt);
-            return ResponseEntity.ok(buildGenerationResponse(
-                    novelId,
-                    topic,
-                    style,
-                    currentChapterNum,
-                    promptId,
-                    worldSetting,
-                    memory,
-                    systemPrompt,
-                    userPrompt,
-                    generated,
-                    false,
-                    null
-            ));
+            return generationResponse(context, generated, false, null);
         } catch (CostLimitExceededException ex) {
-            if (!settings.isDegradeOnBudgetExceeded()) {
-                throw ex;
-            }
-            tokenCostService.recordDegradation(
+            return degradedGenerationResponse(
+                    context,
+                    settings.isDegradeOnBudgetExceeded(),
                     "BUDGET_LIMIT",
-                    "outline_only_response",
-                    ex.getMessage(),
-                    novelId,
-                    "controller",
-                    "outline",
-                    "chat.generate"
+                    "budget_limit",
+                    ex
             );
-            String degradedContent = buildDegradedOutline(topic, style, currentChapterNum, memory, "budget_limit");
-            return ResponseEntity.ok(buildGenerationResponse(
-                    novelId,
-                    topic,
-                    style,
-                    currentChapterNum,
-                    promptId,
-                    worldSetting,
-                    memory,
-                    systemPrompt,
-                    userPrompt,
-                    degradedContent,
-                    true,
-                    buildDegradationPolicy("budget_limit", "outline_only_response", ex.getMessage())
-            ));
         } catch (RuntimeException ex) {
-            if (!settings.isDegradeOnModelFailure()) {
-                throw ex;
-            }
-            tokenCostService.recordDegradation(
+            return degradedGenerationResponse(
+                    context,
+                    settings.isDegradeOnModelFailure(),
                     "MODEL_FAILURE",
-                    "outline_only_response",
-                    ex.getMessage(),
-                    novelId,
-                    "controller",
-                    "outline",
-                    "chat.generate"
+                    "model_failure",
+                    ex
             );
-            String degradedContent = buildDegradedOutline(topic, style, currentChapterNum, memory, "model_failure");
-            return ResponseEntity.ok(buildGenerationResponse(
-                    novelId,
-                    topic,
-                    style,
-                    currentChapterNum,
-                    promptId,
-                    worldSetting,
-                    memory,
-                    systemPrompt,
-                    userPrompt,
-                    degradedContent,
-                    true,
-                    buildDegradationPolicy("model_failure", "outline_only_response", ex.getMessage())
-            ));
         }
     }
 
@@ -314,8 +280,9 @@ public class NovelController {
      */
     @PostMapping("/admin/milvus/build-index")
     public ResponseEntity<Map<String, String>> buildAllIndexes() {
-        milvusAdminService.buildAllIndexesAsync();
-        return ResponseEntity.ok(Map.of("status", "索引构建已异步启动，请通过日志或 Attu 监控进度"));
+        return adminResponse(
+                () -> milvusAdminService.buildAllIndexesAsync(),
+                "索引构建已异步启动，请通过日志或 Attu 监控进度");
     }
 
     /**
@@ -323,8 +290,7 @@ public class NovelController {
      */
     @PostMapping("/admin/milvus/load")
     public ResponseEntity<Map<String, String>> loadAllCollections() {
-        milvusAdminService.loadAllCollections();
-        return ResponseEntity.ok(Map.of("status", "所有集合已加载到内存"));
+        return adminResponse(milvusAdminService::loadAllCollections, "所有集合已加载到内存");
     }
 
     /**
@@ -332,12 +298,13 @@ public class NovelController {
      */
     @PostMapping("/admin/milvus/release")
     public ResponseEntity<Map<String, String>> releaseAllCollections() {
-        milvusAdminService.releaseCollection("novel_segments");
-        milvusAdminService.releaseCollection("novel_events");
-        milvusAdminService.releaseCollection("novel_characters");
-        milvusAdminService.releaseCollection("novel_items");
-        milvusAdminService.releaseCollection("novel_faction_inspire");
-        return ResponseEntity.ok(Map.of("status", "所有集合已从内存释放"));
+        return adminResponse(() -> {
+            milvusAdminService.releaseCollection("novel_segments");
+            milvusAdminService.releaseCollection("novel_events");
+            milvusAdminService.releaseCollection("novel_characters");
+            milvusAdminService.releaseCollection("novel_items");
+            milvusAdminService.releaseCollection("novel_faction_inspire");
+        }, "所有集合已从内存释放");
     }
 
     /**
@@ -345,8 +312,7 @@ public class NovelController {
      */
     @PostMapping("/admin/milvus/flush")
     public ResponseEntity<Map<String, String>> flushAll() {
-        milvusAdminService.flushAll();
-        return ResponseEntity.ok(Map.of("status", "所有集合 flush 完成"));
+        return adminResponse(milvusAdminService::flushAll, "所有集合 flush 完成");
     }
 
     /**
@@ -354,8 +320,7 @@ public class NovelController {
      */
     @PostMapping("/admin/milvus/compact")
     public ResponseEntity<Map<String, String>> compactAll() {
-        milvusAdminService.compactAll();
-        return ResponseEntity.ok(Map.of("status", "所有集合 compact 指令已发出"));
+        return adminResponse(milvusAdminService::compactAll, "所有集合 compact 指令已发出");
     }
 
     /**
@@ -363,8 +328,9 @@ public class NovelController {
      */
     @DeleteMapping("/admin/milvus/novel/{novelId}")
     public ResponseEntity<Map<String, String>> clearNovelVectors(@PathVariable Long novelId) {
-        milvusAdminService.deleteByNovelIdAll(novelId);
-        return ResponseEntity.ok(Map.of("status", "小说 " + novelId + " 的所有向量已清空"));
+        return adminResponse(
+                () -> milvusAdminService.deleteByNovelIdAll(novelId),
+                "小说 " + novelId + " 的所有向量已清空");
     }
 
     /**
@@ -373,9 +339,9 @@ public class NovelController {
      */
     @PostMapping("/admin/milvus/novel/{novelId}/rebuild")
     public ResponseEntity<Map<String, String>> rebuildNovel(@PathVariable Long novelId) {
-        milvusAdminService.rebuildIndexForNovel(novelId);
-        return ResponseEntity.ok(Map.of("status",
-                "小说 " + novelId + " 旧向量已清空，请写入新数据后调用 /admin/milvus/finalize 完成建索引+加载"));
+        return adminResponse(
+                () -> milvusAdminService.rebuildIndexForNovel(novelId),
+                "小说 " + novelId + " 旧向量已清空，请写入新数据后调用 /admin/milvus/finalize 完成建索引+加载");
     }
 
     /**
@@ -383,13 +349,17 @@ public class NovelController {
      */
     @PostMapping("/admin/milvus/finalize")
     public ResponseEntity<Map<String, String>> finalizeRebuild() {
-        milvusAdminService.finalizeRebuild();
-        return ResponseEntity.ok(Map.of("status", "全量重建完成，所有集合已就绪"));
+        return adminResponse(milvusAdminService::finalizeRebuild, "全量重建完成，所有集合已就绪");
     }
 
     // =============================================
     // 辅助方法
     // =============================================
+
+    private ResponseEntity<Map<String, String>> adminResponse(Runnable action, String status) {
+        action.run();
+        return ResponseEntity.ok(Map.of("status", status));
+    }
 
     private static final Map<String, String> SYSTEM_PROMPTS = new HashMap<>();
     static {
@@ -445,79 +415,221 @@ public class NovelController {
                 - 善用比喻和意象，将抽象情感化为具象画面""");
     }
 
-    private String buildSystemPrompt(String style, String worldSetting,
-                                      MilvusSearchService.WritingMemory memory,
-                                      String promptId) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(SYSTEM_PROMPTS.getOrDefault(promptId, SYSTEM_PROMPTS.get("1A")));
+    private PromptAssembly buildSystemPrompt(String style,
+                                             String worldSetting,
+                                             MilvusSearchService.WritingMemory memory,
+                                             String promptId,
+                                             String userPrompt) {
+        int inputTokenBudget = Math.max(256, retrievalProperties.getMemory().getPromptTokenBudget());
+        int wrapperTokenReserve = 16;
+        int maxUserPromptTokens = Math.max(64, Math.min(400, inputTokenBudget / 4));
+        String budgetedUserPrompt = trimToTokenBudget(userPrompt, maxUserPromptTokens);
+        int userPromptTokens = tokenCostService.estimateTokens(budgetedUserPrompt);
+        int systemTokenBudget = Math.max(1, inputTokenBudget - wrapperTokenReserve - userPromptTokens);
+        PromptAccumulator prompt = new PromptAccumulator(systemTokenBudget);
 
-        if (worldSetting != null && !worldSetting.isEmpty()) {
-            sb.append("\n\n??????\n").append(trimText(worldSetting, 220));
-        }
+        String basePrompt = SYSTEM_PROMPTS.getOrDefault(promptId, SYSTEM_PROMPTS.get("1A"));
+        prompt.appendRequired(basePrompt);
+        prompt.appendRequired("\n\n【续写规则】\n"
+                + "- 服从已知设定，不编造冲突事实。\n"
+                + "- 承接近期情节，避免重复复述。\n"
+                + "- 自然推进未解决伏笔，不强行回收。\n"
+                + "- 保持" + style + "风格。\n");
 
         if (memory.getCurrentChapterNum() != null) {
-            sb.append("\n\n????????\n?").append(memory.getCurrentChapterNum()).append("?\n");
+            prompt.appendOptional("\n【目标章节】第" + memory.getCurrentChapterNum() + "章\n");
+        }
+        if (worldSetting != null && !worldSetting.isBlank()) {
+            String compactWorldSetting = trimText(worldSetting, 220);
+            if (prompt.appendOptional("\n【世界设定】\n" + compactWorldSetting + "\n")) {
+                prompt.registerContextFingerprint(compactWorldSetting);
+            }
         }
 
-        appendSection(sb, "????", memory.getRecentChapters(), 2, item ->
-                String.format("?%s? %s?%s",
-                        item.get("chapter_num"),
-                        trimText(firstNonBlank(item.get("title"), "?????"), 16),
-                        trimText(firstNonBlank(item.get("summary"), item.get("key_events"), "????"), 60)));
-
-        appendSection(sb, "????", memory.getSegments(), 3, item ->
-                trimText(firstNonBlank(item.get("content"), ""), 80));
-
-        appendSection(sb, "?????", memory.getHooks(), 2, item ->
-                String.format("%s?%s",
-                        trimText(firstNonBlank(item.get("title"), "?????"), 16),
+        appendSection(prompt, "recentChapterContext", "近期章节", memory.getRecentChapters(), 2, item ->
+                String.format("第%s章 %s：%s",
+                        firstNonBlank(item.get("chapter_num"), "?"),
+                        trimText(firstNonBlank(item.get("title"), "未命名章节"), 16),
+                        trimText(firstNonBlank(item.get("summary"), item.get("key_events"), "无摘要"), 60)));
+        appendSection(prompt, "unresolvedHooks", "未解决伏笔", memory.getHooks(), 2, item ->
+                String.format("%s：%s",
+                        trimText(firstNonBlank(item.get("title"), "未命名伏笔"), 16),
                         trimText(firstNonBlank(item.get("description"), ""), 56)));
-
-        appendSection(sb, "????", memory.getCharacters(), 3, item ->
-                String.format("%s?%s",
-                        firstNonBlank(item.get("name"), "????"),
+        appendSection(prompt, "keyCharacters", "关键人物", memory.getCharacters(), 3, item ->
+                String.format("%s：%s",
+                        firstNonBlank(item.get("name"), "未知人物"),
                         trimText(firstNonBlank(item.get("char_text"), ""), 56)));
-
-        appendSection(sb, "????", memory.getItems(), 1, item ->
-                String.format("%s?%s",
-                        firstNonBlank(item.get("name"), "?????"),
+        appendSection(prompt, "sceneSegments", "相关片段", memory.getSegments(), 3, item ->
+                trimText(firstNonBlank(item.get("content"), ""), 80));
+        appendSection(prompt, "relations", "人物关系", memory.getRelations(), 2, item ->
+                String.format("%s-%s：%s；%s",
+                        firstNonBlank(item.get("source_name"), "未知"),
+                        firstNonBlank(item.get("target_name"), "未知"),
+                        firstNonBlank(item.get("relation_type"), "未知"),
+                        trimText(firstNonBlank(item.get("description"), ""), 36)));
+        appendSection(prompt, "items", "相关物品", memory.getItems(), 1, item ->
+                String.format("%s：%s",
+                        firstNonBlank(item.get("name"), "未知物品"),
                         trimText(firstNonBlank(item.get("item_text"), ""), 42)));
-
-        appendSection(sb, "????", memory.getFactions(), 1, item ->
-                String.format("%s?%s",
-                        firstNonBlank(item.get("title"), "?????"),
+        appendSection(prompt, "factions", "相关势力", memory.getFactions(), 1, item ->
+                String.format("%s：%s",
+                        firstNonBlank(item.get("title"), "未知势力"),
                         trimText(firstNonBlank(item.get("content"), ""), 42)));
 
-        appendSection(sb, "????", memory.getRelations(), 2, item ->
-                String.format("%s-%s?%s??%s",
-                        firstNonBlank(item.get("source_name"), "??"),
-                        firstNonBlank(item.get("target_name"), "??"),
-                        firstNonBlank(item.get("relation_type"), "??"),
-                        trimText(firstNonBlank(item.get("description"), ""), 36)));
-
-        sb.append("\n\n??????\n")
-                .append("- ???????????????????\n")
-                .append("- ????????????????\n")
-                .append("- ??????????????????????\n")
-                .append("- ?????").append(style).append("?\n");
-
-        return sb.toString();
+        return prompt.toAssembly(inputTokenBudget, budgetedUserPrompt, userPromptTokens);
     }
 
-    private void appendSection(StringBuilder sb, String title,
+    private void appendSection(PromptAccumulator prompt,
+                               String blockKey,
+                               String title,
                                List<Map<String, Object>> items,
                                int maxItems,
                                java.util.function.Function<Map<String, Object>, String> formatter) {
         if (items == null || items.isEmpty() || maxItems <= 0) {
             return;
         }
-        sb.append("\n\n?").append(title).append("?\n");
-        int count = Math.min(items.size(), maxItems);
-        for (int i = 0; i < count; i++) {
-            sb.append("[").append(i + 1).append("] ")
-                    .append(formatter.apply(items.get(i)))
-                    .append("\n");
+        int accepted = 0;
+        for (int i = 0; i < items.size(); i++) {
+            String content = formatter.apply(items.get(i));
+            if (content == null || content.isBlank()) {
+                continue;
+            }
+            String prefix = accepted == 0 ? "\n【" + title + "】\n" : "";
+            String formattedText = prefix + "[" + (accepted + 1) + "] " + content + "\n";
+            if (accepted >= maxItems) {
+                prompt.recordLimitDrop(formattedText);
+            } else if (prompt.appendMemory(blockKey, i, content, formattedText)) {
+                accepted++;
+            }
         }
+    }
+
+    private String trimToTokenBudget(String text, int tokenBudget) {
+        if (text == null || text.isBlank() || tokenBudget <= 0) {
+            return "";
+        }
+        if (tokenCostService.estimateTokens(text) <= tokenBudget) {
+            return text;
+        }
+        int low = 0;
+        int high = text.length();
+        while (low < high) {
+            int mid = (low + high + 1) >>> 1;
+            if (tokenCostService.estimateTokens(text.substring(0, mid)) <= tokenBudget) {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        return text.substring(0, low).stripTrailing();
+    }
+
+    private String memoryFingerprint(String content) {
+        return content.toLowerCase(Locale.ROOT)
+                .replaceAll("[\\s\\p{Punct}，。！？；：（）【】、]+", "");
+    }
+
+    private final class PromptAccumulator {
+        private final int tokenBudget;
+        private final StringBuilder text = new StringBuilder();
+        private final Set<String> fingerprints = new LinkedHashSet<>();
+        private final Map<String, List<Integer>> selectedIndexes = new LinkedHashMap<>();
+        private int candidateMemoryTokens;
+        private int selectedMemoryTokens;
+        private int duplicateDroppedCount;
+        private int budgetDroppedCount;
+        private int limitDroppedCount;
+
+        private PromptAccumulator(int tokenBudget) {
+            this.tokenBudget = tokenBudget;
+        }
+
+        private void appendRequired(String value) {
+            int remainingTokens = tokenBudget - tokenCostService.estimateTokens(text.toString());
+            if (remainingTokens <= 0) {
+                return;
+            }
+            text.append(trimToTokenBudget(value, remainingTokens));
+        }
+
+        private boolean appendOptional(String value) {
+            if (value == null || value.isBlank()) {
+                return false;
+            }
+            String candidate = text + value;
+            if (tokenCostService.estimateTokens(candidate) > tokenBudget) {
+                return false;
+            }
+            text.append(value);
+            return true;
+        }
+
+        private boolean appendMemory(String blockKey, int sourceIndex, String content, String formattedText) {
+            int formattedTokens = tokenCostService.estimateTokens(formattedText);
+            candidateMemoryTokens += formattedTokens;
+            String fingerprint = memoryFingerprint(content);
+            boolean duplicate = fingerprints.stream().anyMatch(existing ->
+                    existing.equals(fingerprint)
+                            || (Math.min(existing.length(), fingerprint.length()) >= 16
+                            && (existing.contains(fingerprint) || fingerprint.contains(existing))));
+            if (fingerprint.isBlank() || duplicate) {
+                duplicateDroppedCount++;
+                return false;
+            }
+            if (!appendOptional(formattedText)) {
+                budgetDroppedCount++;
+                return false;
+            }
+            fingerprints.add(fingerprint);
+            selectedIndexes.computeIfAbsent(blockKey, ignored -> new ArrayList<>()).add(sourceIndex);
+            selectedMemoryTokens += formattedTokens;
+            return true;
+        }
+
+        private void recordLimitDrop(String formattedText) {
+            candidateMemoryTokens += tokenCostService.estimateTokens(formattedText);
+            limitDroppedCount++;
+        }
+
+        private void registerContextFingerprint(String content) {
+            String fingerprint = memoryFingerprint(content);
+            if (!fingerprint.isBlank()) {
+                fingerprints.add(fingerprint);
+            }
+        }
+
+        private PromptAssembly toAssembly(int inputTokenBudget, String userPrompt, int userPromptTokens) {
+            Map<String, List<Integer>> immutableIndexes = new LinkedHashMap<>();
+            selectedIndexes.forEach((key, value) -> immutableIndexes.put(key, List.copyOf(value)));
+            return new PromptAssembly(
+                    text.toString(),
+                    userPrompt,
+                    inputTokenBudget,
+                    tokenBudget,
+                    userPromptTokens,
+                    tokenCostService.estimateTokens(text.toString()),
+                    Collections.unmodifiableMap(immutableIndexes),
+                    candidateMemoryTokens,
+                    selectedMemoryTokens,
+                    duplicateDroppedCount,
+                    budgetDroppedCount,
+                    limitDroppedCount
+            );
+        }
+    }
+
+    private record PromptAssembly(String prompt,
+                                  String userPrompt,
+                                  int inputTokenBudget,
+                                  int systemTokenBudget,
+                                  int userPromptTokens,
+                                  int systemPromptTokens,
+                                  Map<String, List<Integer>> selectedIndexes,
+                                  int candidateMemoryTokens,
+                                  int selectedMemoryTokens,
+                                  int duplicateDroppedCount,
+                                  int budgetDroppedCount,
+                                  int limitDroppedCount) {
     }
 
     private Map<String, Object> buildMemorySummary(MilvusSearchService.WritingMemory memory) {
@@ -733,39 +845,49 @@ public class NovelController {
                                                      MilvusSearchService.WritingMemory memory,
                                                      String systemPrompt,
                                                      String userPrompt,
-                                                     String generated) {
+                                                     String generated,
+                                                     PromptAssembly promptAssembly) {
         Map<String, Object> trace = new LinkedHashMap<>();
-        Map<String, Object> selectedMemoryBlocks = buildPromptMemoryBlocks(memory);
+        Map<String, Object> selectedMemoryBlocks = buildPromptMemoryBlocks(memory, promptAssembly);
         trace.put("promptId", promptId);
         trace.put("topic", topic);
         trace.put("style", style);
         trace.put("selectedMemoryBlocks", selectedMemoryBlocks);
         trace.put("droppedCandidates", collectDroppedCandidates(selectedMemoryBlocks));
         trace.put("contextStats", buildContextStats(worldSetting, systemPrompt, userPrompt, generated));
+        trace.put("promptBudget", buildPromptBudgetTrace(promptAssembly));
         trace.put("tokenCost", buildTokenCostTrace(systemPrompt, userPrompt, generated));
         return trace;
     }
 
-    private Map<String, Object> buildPromptMemoryBlocks(MilvusSearchService.WritingMemory memory) {
+    private Map<String, Object> buildPromptMemoryBlocks(MilvusSearchService.WritingMemory memory,
+                                                        PromptAssembly promptAssembly) {
         Map<String, Object> blocks = new LinkedHashMap<>();
-        blocks.put("recentChapterContext", buildPromptTraceBlock(memory.getRecentChapters(), 2, item ->
+        blocks.put("recentChapterContext", buildPromptTraceBlock(memory.getRecentChapters(),
+                promptAssembly.selectedIndexes().getOrDefault("recentChapterContext", List.of()), item ->
                 String.format("chapter=%s %s", firstNonBlank(item.get("chapter_num")),
                         trimText(firstNonBlank(item.get("summary"), item.get("content"), item.get("title"), "context"), 48))));
-        blocks.put("sceneSegments", buildPromptTraceBlock(memory.getSegments(), 3, item ->
+        blocks.put("sceneSegments", buildPromptTraceBlock(memory.getSegments(),
+                promptAssembly.selectedIndexes().getOrDefault("sceneSegments", List.of()), item ->
                 trimText(firstNonBlank(item.get("content"), item.get("segment_type"), "segment"), 60)));
-        blocks.put("unresolvedHooks", buildPromptTraceBlock(memory.getHooks(), 2, item ->
+        blocks.put("unresolvedHooks", buildPromptTraceBlock(memory.getHooks(),
+                promptAssembly.selectedIndexes().getOrDefault("unresolvedHooks", List.of()), item ->
                 String.format("%s:%s", firstNonBlank(item.get("title"), "hook"),
                         trimText(firstNonBlank(item.get("description"), ""), 48))));
-        blocks.put("keyCharacters", buildPromptTraceBlock(memory.getCharacters(), 3, item ->
+        blocks.put("keyCharacters", buildPromptTraceBlock(memory.getCharacters(),
+                promptAssembly.selectedIndexes().getOrDefault("keyCharacters", List.of()), item ->
                 String.format("%s:%s", firstNonBlank(item.get("name"), "character"),
                         trimText(firstNonBlank(item.get("char_text"), item.get("description"), ""), 48))));
-        blocks.put("items", buildPromptTraceBlock(memory.getItems(), 1, item ->
+        blocks.put("items", buildPromptTraceBlock(memory.getItems(),
+                promptAssembly.selectedIndexes().getOrDefault("items", List.of()), item ->
                 String.format("%s:%s", firstNonBlank(item.get("name"), "item"),
                         trimText(firstNonBlank(item.get("item_text"), item.get("description"), ""), 40))));
-        blocks.put("factions", buildPromptTraceBlock(memory.getFactions(), 1, item ->
+        blocks.put("factions", buildPromptTraceBlock(memory.getFactions(),
+                promptAssembly.selectedIndexes().getOrDefault("factions", List.of()), item ->
                 String.format("%s:%s", firstNonBlank(item.get("title"), "faction"),
                         trimText(firstNonBlank(item.get("content"), item.get("description"), ""), 40))));
-        blocks.put("relations", buildPromptTraceBlock(memory.getRelations(), 2, item ->
+        blocks.put("relations", buildPromptTraceBlock(memory.getRelations(),
+                promptAssembly.selectedIndexes().getOrDefault("relations", List.of()), item ->
                 String.format("%s-%s-%s", firstNonBlank(item.get("source_name"), "source"),
                         firstNonBlank(item.get("relation_type"), "relation"),
                         firstNonBlank(item.get("target_name"), "target"))));
@@ -773,12 +895,15 @@ public class NovelController {
     }
 
     private Map<String, Object> buildPromptTraceBlock(List<Map<String, Object>> items,
-                                                      int promptLimit,
+                                                      List<Integer> selectedIndexes,
                                                       java.util.function.Function<Map<String, Object>, String> formatter) {
         int totalCount = items == null ? 0 : items.size();
-        int usedCount = Math.min(totalCount, Math.max(promptLimit, 0));
-        List<String> samples = items == null ? List.of() : items.stream()
-                .limit(usedCount)
+        List<Integer> validIndexes = items == null ? List.of() : selectedIndexes.stream()
+                .filter(index -> index >= 0 && index < items.size())
+                .toList();
+        int usedCount = validIndexes.size();
+        List<String> samples = validIndexes.stream()
+                .map(items::get)
                 .map(formatter)
                 .map(value -> trimText(firstNonBlank(value), 80))
                 .toList();
@@ -789,6 +914,25 @@ public class NovelController {
         block.put("omittedCount", Math.max(totalCount - usedCount, 0));
         block.put("samples", samples);
         return block;
+    }
+
+    private Map<String, Object> buildPromptBudgetTrace(PromptAssembly promptAssembly) {
+        Map<String, Object> budget = new LinkedHashMap<>();
+        budget.put("inputTokenBudget", promptAssembly.inputTokenBudget());
+        budget.put("systemTokenBudget", promptAssembly.systemTokenBudget());
+        budget.put("estimatedSystemTokens", promptAssembly.systemPromptTokens());
+        budget.put("estimatedUserTokens", promptAssembly.userPromptTokens());
+        budget.put("estimatedInputTokens", promptAssembly.systemPromptTokens() + promptAssembly.userPromptTokens());
+        budget.put("remainingInputTokens", Math.max(0,
+                promptAssembly.inputTokenBudget() - promptAssembly.systemPromptTokens() - promptAssembly.userPromptTokens()));
+        budget.put("candidateMemoryTokens", promptAssembly.candidateMemoryTokens());
+        budget.put("selectedMemoryTokens", promptAssembly.selectedMemoryTokens());
+        budget.put("savedMemoryTokens", Math.max(0,
+                promptAssembly.candidateMemoryTokens() - promptAssembly.selectedMemoryTokens()));
+        budget.put("duplicateDroppedCount", promptAssembly.duplicateDroppedCount());
+        budget.put("budgetDroppedCount", promptAssembly.budgetDroppedCount());
+        budget.put("limitDroppedCount", promptAssembly.limitDroppedCount());
+        return budget;
     }
 
     private List<Map<String, Object>> collectDroppedCandidates(Map<String, Object> selectedMemoryBlocks) {
@@ -828,7 +972,7 @@ public class NovelController {
                                                     String generated) {
         Map<String, Object> trace = new LinkedHashMap<>();
         TokenCostService.SettingsSnapshot settings = tokenCostService.getSettingsSnapshot();
-        String fullPrompt = buildFullPrompt(systemPrompt, userPrompt);
+        String fullPrompt = ChatPromptSupport.toEstimationText(systemPrompt, userPrompt);
         int estimatedInputTokens = tokenCostService.estimateTokens(fullPrompt);
         int reservedOutputTokens = settings == null ? 0 : Math.max(settings.getReservedCompletionTokens(), 0);
 
@@ -903,42 +1047,88 @@ public class NovelController {
         return Math.round(value * 10000D) / 10000D;
     }
 
-    private String buildFullPrompt(String systemPrompt, String userPrompt) {
-        if (systemPrompt == null || systemPrompt.isEmpty()) {
-            return userPrompt == null ? "" : userPrompt;
-        }
-        return "[SYSTEM]\n" + systemPrompt + "\n\n[USER]\n" + (userPrompt == null ? "" : userPrompt);
+    private ResponseEntity<Map<String, Object>> generationResponse(GenerationContext context,
+                                                                    String generated,
+                                                                    boolean degraded,
+                                                                    Map<String, Object> degradationPolicy) {
+        return ResponseEntity.ok(buildGenerationResponse(context, generated, degraded, degradationPolicy));
     }
 
-    private Map<String, Object> buildGenerationResponse(Long novelId,
-                                                       String topic,
-                                                       String style,
-                                                       Integer currentChapterNum,
-                                                       String promptId,
-                                                       String worldSetting,
-                                                       MilvusSearchService.WritingMemory memory,
-                                                       String systemPrompt,
-                                                       String userPrompt,
-                                                       String generated,
-                                                       boolean degraded,
-                                                       Map<String, Object> degradationPolicy) {
+    private ResponseEntity<Map<String, Object>> degradedGenerationResponse(GenerationContext context,
+                                                                            boolean degradationEnabled,
+                                                                            String trigger,
+                                                                            String outlineMode,
+                                                                            RuntimeException exception) {
+        if (!degradationEnabled) {
+            throw exception;
+        }
+        tokenCostService.recordDegradation(
+                trigger,
+                "outline_only_response",
+                exception.getMessage(),
+                context.novelId(),
+                "controller",
+                "outline",
+                "chat.generate"
+        );
+        String degradedContent = buildDegradedOutline(
+                context.topic(),
+                context.style(),
+                context.currentChapterNum(),
+                context.memory(),
+                outlineMode
+        );
+        return generationResponse(
+                context,
+                degradedContent,
+                true,
+                buildDegradationPolicy(trigger.toLowerCase(Locale.ROOT), "outline_only_response", exception.getMessage())
+        );
+    }
+
+    private Map<String, Object> buildGenerationResponse(GenerationContext context,
+                                                         String generated,
+                                                         boolean degraded,
+                                                         Map<String, Object> degradationPolicy) {
         Map<String, Object> result = new HashMap<>();
-        result.put("topic", topic);
-        result.put("style", style);
-        result.put("currentChapterNum", currentChapterNum);
+        result.put("topic", context.topic());
+        result.put("style", context.style());
+        result.put("currentChapterNum", context.currentChapterNum());
         result.put("content", generated);
-        result.put("memoryCount", memory.getTotalCount());
-        result.put("memory", buildMemorySummary(memory));
-        result.put("memoryLayers", buildMemoryLayers(memory));
-        result.put("consistencyCheck", buildConsistencyCheck(novelId, memory, currentChapterNum));
-        result.put("generationTrace", buildGenerationTrace(promptId, topic, style, worldSetting, memory, systemPrompt, userPrompt, generated));
-        result.put("postGenerationCheck", buildPostGenerationCheck(topic, generated));
-        result.put("promptChars", systemPrompt.length() + userPrompt.length());
+        result.put("memoryCount", context.memory().getTotalCount());
+        result.put("memory", buildMemorySummary(context.memory()));
+        result.put("memoryLayers", buildMemoryLayers(context.memory()));
+        result.put("consistencyCheck", buildConsistencyCheck(
+                context.novelId(), context.memory(), context.currentChapterNum()));
+        result.put("generationTrace", buildGenerationTrace(
+                context.promptId(),
+                context.topic(),
+                context.style(),
+                context.worldSetting(),
+                context.memory(),
+                context.systemPrompt(),
+                context.userPrompt(),
+                generated,
+                context.promptAssembly()));
+        result.put("postGenerationCheck", buildPostGenerationCheck(context.topic(), generated));
+        result.put("promptChars", context.systemPrompt().length() + context.userPrompt().length());
         result.put("degraded", degraded);
         if (degradationPolicy != null) {
             result.put("degradationPolicy", degradationPolicy);
         }
         return result;
+    }
+
+    private record GenerationContext(Long novelId,
+                                     String topic,
+                                     String style,
+                                     Integer currentChapterNum,
+                                     String promptId,
+                                     String worldSetting,
+                                     MilvusSearchService.WritingMemory memory,
+                                     String systemPrompt,
+                                     String userPrompt,
+                                     PromptAssembly promptAssembly) {
     }
 
     private Map<String, Object> buildDegradationPolicy(String trigger, String strategy, String reason) {

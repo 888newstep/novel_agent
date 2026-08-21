@@ -327,11 +327,21 @@ Milvus 负责存放“可被语义召回的文本片段与对象描述”。
 当前已经具备的性能优化：
 
 - 文本预处理，减少无意义空白差异
-- LRU 风格缓存：`EMBEDDING_CACHE_SIZE = 512`
+- 可配置的 LRU 缓存：`ai.embedding.cache-size`（默认 `1024`）
+- 短查询跨请求复用向量；超过 `ai.embedding.cache-max-text-chars`（默认 `512`）的正文仅在当前批次去重，避免污染缓存
+- `buildWritingMemory(...)` 使用请求级缓存复用同一次记忆构建中的长查询向量，请求结束后自动释放
 - 批量嵌入优先，单条回退补偿
 - 与 `TokenCostService` 联动，记录 Embedding 开销
 
 这部分直接对应“提高性能、降低 Token 消耗、减少冗余”的目标。
+
+生成 Prompt 还会把已加入的世界设定作为记忆去重基准；物品、势力、关系等记忆如果只是重复同一事实，会被计入 `duplicateDroppedCount` 而不再重复发送给模型。
+
+检索查询在生成查询变体和 Embedding 前会按 `retrieval.search.max-query-chars`（默认 `240`）规范化并截断，并通过 `max-total-query-chars`（默认 `480`）限制所有变体的总长度，防止异常长的主题被复制到多个检索向量中重复计费。
+
+数据导入批次会在 Milvus 插入重试期间复用已成功生成的 `PreparedBatch`；只有 Embedding 阶段本身失败时才重新请求向量，避免存储故障放大 Embedding Token 消耗。
+
+聊天调用通过 `ChatPromptSupport` 统一构建结构化 system/user 消息、直接 API 消息和成本估算文本；普通模型调用不再把 `[SYSTEM]`、`[USER]` 标签作为正文发送，同时避免控制器与服务重复维护 Prompt 拼接规则。
 
 ### 6.2 MilvusService
 

@@ -1,6 +1,14 @@
 server:
   port: 8080
 
+app:
+  security:
+    # 管理接口必须显式配置密钥；未配置时返回 503，避免误开放高危操作。
+    admin-api-key: ${NOVEL_AGENT_ADMIN_API_KEY:}
+  file-access:
+    # 使用分号分隔多个允许根目录，路径相对于应用工作目录时会先规范化。
+    allowed-roots: ${NOVEL_AGENT_FILE_ALLOWED_ROOTS:novels;artifacts}
+
 management:
   endpoints:
     web:
@@ -64,6 +72,8 @@ ai:
 
   embedding:
     provider: siliconflow        # ollama | siliconflow
+    cache-size: ${NOVEL_AGENT_EMBEDDING_CACHE_SIZE:1024}
+    cache-max-text-chars: ${NOVEL_AGENT_EMBEDDING_CACHE_MAX_TEXT_CHARS:512}
     ollama:
       base-url: http://localhost:11434
       model-name: bge-m3
@@ -79,7 +89,7 @@ ai:
     strict-mode: false
     recent-records: 200
     max-estimated-tokens-per-request: 12000
-    reserved-completion-tokens: 1200
+    reserved-completion-tokens: ${NOVEL_AGENT_RESERVED_COMPLETION_TOKENS:1200}
     daily-token-budget: 300000
     monthly-token-budget: 5000000
     daily-budget-usd: 5.0
@@ -141,9 +151,12 @@ retrieval:
     ef-search: 64
     default-fetch-multiplier: 2
     max-query-variants: 3
+    max-query-chars: ${NOVEL_AGENT_RETRIEVAL_MAX_QUERY_CHARS:240}
+    max-total-query-chars: ${NOVEL_AGENT_RETRIEVAL_MAX_TOTAL_QUERY_CHARS:480}
     per-chapter-segment-limit: 1
     per-chapter-event-limit: 1
   memory:
+    prompt-token-budget: ${NOVEL_AGENT_PROMPT_TOKEN_BUDGET:1600}
     recent-chapter-limit: 3
     segment-limit: 3
     hook-limit: 2

@@ -44,18 +44,20 @@ public class DeepSeekService {
     }
 
     public String chat(Long novelId, String systemPrompt, String userPrompt) {
-        String fullPrompt = buildPrompt(systemPrompt, userPrompt);
+        String estimationText = ChatPromptSupport.toEstimationText(systemPrompt, userPrompt);
         int reservedCompletionTokens = aiProperties.getCostControl().getReservedCompletionTokens();
         TokenCostService.UsageReservation reservation = tokenCostService.reserveChatRequest(
                 novelId,
                 currentProvider(),
                 currentChatModelName(),
                 "chat.generate",
-                fullPrompt,
+                estimationText,
                 reservedCompletionTokens
         );
         try {
-            String response = chatLanguageModel.generate(fullPrompt);
+            String response = chatLanguageModel.generate(
+                    ChatPromptSupport.toLangChainMessages(systemPrompt, userPrompt)
+            ).content().text();
             tokenCostService.recordChatSuccess(reservation, response, null, null);
             log.info("Chat generation finished, chars={}", response.length());
             return response;
@@ -109,16 +111,13 @@ public class DeepSeekService {
                 "deepseek",
                 modelName,
                 source,
-                buildPrompt(systemPrompt, userPrompt),
+                ChatPromptSupport.toEstimationText(systemPrompt, userPrompt),
                 maxTokens
         );
 
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("model", modelName);
-        requestBody.put("messages", List.of(
-                Map.of("role", "system", "content", systemPrompt),
-                Map.of("role", "user", "content", userPrompt)
-        ));
+        requestBody.put("messages", ChatPromptSupport.toApiMessages(systemPrompt, userPrompt));
         requestBody.put("temperature", temperature);
         requestBody.put("max_tokens", maxTokens);
         requestBody.put("stream", false);
@@ -183,13 +182,6 @@ public class DeepSeekService {
                 && !deepseek.getApiKey().isBlank()
                 && deepseek.getBaseUrl() != null
                 && !deepseek.getBaseUrl().isBlank();
-    }
-
-    private String buildPrompt(String systemPrompt, String userPrompt) {
-        if (systemPrompt == null || systemPrompt.isEmpty()) {
-            return userPrompt;
-        }
-        return "[SYSTEM]\n" + systemPrompt + "\n\n[USER]\n" + userPrompt;
     }
 
     private String currentProvider() {

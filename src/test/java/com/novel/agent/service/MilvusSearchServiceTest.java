@@ -151,6 +151,81 @@ class MilvusSearchServiceTest {
     }
 
     @Test
+    void limitsLongQueryBeforeEmbeddingAndExpansion() {
+        MilvusClientV2 milvusClient = mock(MilvusClientV2.class);
+        EmbeddingService embeddingService = mock(EmbeddingService.class);
+        RetrievalProperties retrievalProperties = new RetrievalProperties();
+        retrievalProperties.getSearch().setMaxQueryChars(32);
+        MilvusSearchService service = new MilvusSearchService(
+                milvusClient,
+                embeddingService,
+                mock(ChapterRepository.class),
+                mock(KeyEventRepository.class),
+                mock(RelationRepository.class),
+                retrievalProperties
+        );
+        String longQuery = "abcdefghijklmnopqrstuvwxyz0123456789repeatedcontinuationdetails";
+        String boundedQuery = longQuery.substring(0, 32);
+        String currentChapterHint = retrievalProperties.getHints().getCurrentChapter();
+        when(embeddingService.batchGenerateEmbedding(List.of(
+                boundedQuery,
+                boundedQuery + " " + currentChapterHint
+        ))).thenReturn(List.of(List.of(0.1f, 0.2f), List.of(0.2f, 0.3f)));
+        SearchResp resultResponse = response(searchResult(1L, 0.8f, Map.of(
+                "chapter_num", 9,
+                "segment_type", "scene",
+                "content", boundedQuery
+        )));
+        when(milvusClient.search(any(SearchReq.class))).thenReturn(resultResponse, resultResponse);
+
+        List<Map<String, Object>> results = service.searchSegments(1L, longQuery, 1, 10);
+
+        verify(embeddingService).batchGenerateEmbedding(List.of(
+                boundedQuery,
+                boundedQuery + " " + currentChapterHint
+        ));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> trace = (Map<String, Object>) results.get(0).get("recallTrace");
+        assertEquals(longQuery.length(), trace.get("originalQueryChars"));
+        assertEquals(32, trace.get("queryChars"));
+        assertEquals(true, trace.get("queryTruncated"));
+    }
+
+    @Test
+    void limitsTotalEmbeddingCharsAcrossQueryVariants() {
+        MilvusClientV2 milvusClient = mock(MilvusClientV2.class);
+        EmbeddingService embeddingService = mock(EmbeddingService.class);
+        RetrievalProperties retrievalProperties = new RetrievalProperties();
+        retrievalProperties.getSearch().setMaxQueryChars(32);
+        retrievalProperties.getSearch().setMaxTotalQueryChars(40);
+        MilvusSearchService service = new MilvusSearchService(
+                milvusClient,
+                embeddingService,
+                mock(ChapterRepository.class),
+                mock(KeyEventRepository.class),
+                mock(RelationRepository.class),
+                retrievalProperties
+        );
+        String longQuery = "abcdefghijklmnopqrstuvwxyz0123456789extra";
+        String boundedQuery = longQuery.substring(0, 32);
+        when(embeddingService.batchGenerateEmbedding(List.of(boundedQuery)))
+                .thenReturn(List.of(List.of(0.1f, 0.2f)));
+        when(milvusClient.search(any(SearchReq.class))).thenReturn(response(searchResult(1L, 0.8f, Map.of(
+                "chapter_num", 9,
+                "segment_type", "scene",
+                "content", boundedQuery
+        ))));
+
+        List<Map<String, Object>> results = service.searchSegments(1L, longQuery, 1, 10);
+
+        verify(embeddingService).batchGenerateEmbedding(List.of(boundedQuery));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> trace = (Map<String, Object>) results.get(0).get("recallTrace");
+        assertEquals(1, trace.get("queryVariantCount"));
+        assertEquals(32, trace.get("queryVariantChars"));
+    }
+
+    @Test
     void prioritizesCharacterNameMatchesAndEventHooks() {
         MilvusClientV2 milvusClient = mock(MilvusClientV2.class);
         EmbeddingService embeddingService = mock(EmbeddingService.class);

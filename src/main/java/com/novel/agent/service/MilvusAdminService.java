@@ -10,13 +10,16 @@ import io.milvus.v2.service.index.request.DescribeIndexReq;
 import io.milvus.v2.service.index.request.ListIndexesReq;
 import io.milvus.v2.service.utility.request.CompactReq;
 import io.milvus.v2.service.utility.request.FlushReq;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.function.Consumer;
 
 /**
  * Milvus 管理服务
@@ -25,10 +28,17 @@ import java.util.concurrent.CompletableFuture;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class MilvusAdminService {
 
     private final MilvusClientV2 milvusClient;
+    private final Executor localTaskExecutor;
+
+    public MilvusAdminService(
+            MilvusClientV2 milvusClient,
+            @Qualifier("localTaskExecutor") Executor localTaskExecutor) {
+        this.milvusClient = milvusClient;
+        this.localTaskExecutor = localTaskExecutor;
+    }
 
     /** 5 个业务集合名称 */
     private static final List<String> COLLECTION_NAMES = List.of(
@@ -84,7 +94,7 @@ public class MilvusAdminService {
      * 异步构建索引（轮询监控进度）
      */
     public CompletableFuture<Void> buildIndexAsync(String collectionName) {
-        return CompletableFuture.runAsync(() -> {
+        return submitAsync("index build: " + collectionName, () -> {
             createIndex(collectionName);
             log.info("开始监控 [{}] 索引构建进度...", collectionName);
             pollIndexProgress(collectionName);
@@ -96,18 +106,18 @@ public class MilvusAdminService {
      * 异步串行构建所有集合索引
      */
     public CompletableFuture<Void> buildAllIndexesAsync() {
-        return CompletableFuture.runAsync(() -> {
-            for (String name : COLLECTION_NAMES) {
-                createIndex(name);
-                pollIndexProgress(name);
-                // 集合间短暂休眠，减轻 CPU 压力
-                sleep(3000);
-            }
-            // 知识库索引
-            createIndex(KNOWLEDGE_COLLECTION);
-            pollIndexProgress(KNOWLEDGE_COLLECTION);
-            log.info("全部集合索引构建完成");
-        });
+        return submitAsync("all Milvus index builds", this::buildAllIndexes);
+    }
+
+    private void buildAllIndexes() {
+        for (String name : COLLECTION_NAMES) {
+            createIndex(name);
+            pollIndexProgress(name);
+            sleep(3000);
+        }
+        createIndex(KNOWLEDGE_COLLECTION);
+        pollIndexProgress(KNOWLEDGE_COLLECTION);
+        log.info("全部集合索引构建完成");
     }
 
     /**
@@ -169,10 +179,7 @@ public class MilvusAdminService {
      * 刷新所有集合
      */
     public void flushAll() {
-        for (String name : COLLECTION_NAMES) {
-            flush(name);
-        }
-        flush(KNOWLEDGE_COLLECTION);
+        forEachCollection(this::flush);
         log.info("所有集合 flush 完成");
     }
 
@@ -194,10 +201,7 @@ public class MilvusAdminService {
      * 加载所有集合
      */
     public void loadAllCollections() {
-        for (String name : COLLECTION_NAMES) {
-            loadCollectionIfReady(name);
-        }
-        loadCollectionIfReady(KNOWLEDGE_COLLECTION);
+        forEachCollection(this::loadCollectionIfReady);
         log.info("所有集合已加载到内存");
     }
 
@@ -261,10 +265,7 @@ public class MilvusAdminService {
      * 对所有集合执行 compact
      */
     public void compactAll() {
-        for (String name : COLLECTION_NAMES) {
-            compact(name);
-        }
-        compact(KNOWLEDGE_COLLECTION);
+        forEachCollection(this::compact);
         log.info("所有集合 compact 指令已发出");
     }
 
@@ -333,7 +334,7 @@ public class MilvusAdminService {
         flushAll();
 
         // 2. 串行构建索引
-        buildAllIndexesAsync().join();
+        buildAllIndexes();
 
         // 3. compact 碎片整理
         compactAll();
@@ -353,6 +354,27 @@ public class MilvusAdminService {
             Thread.sleep(millis);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    private void forEachCollection(Consumer<String> action) {
+        COLLECTION_NAMES.forEach(action);
+        action.accept(KNOWLEDGE_COLLECTION);
+    }
+
+    private CompletableFuture<Void> submitAsync(String taskName, Runnable task) {
+        try {
+            return CompletableFuture.runAsync(task, localTaskExecutor)
+                    .whenComplete((ignored, throwable) -> {
+                        if (throwable == null) {
+                            log.info("Milvus local task completed: {}", taskName);
+                        } else {
+                            log.error("Milvus local task failed: {}", taskName, throwable);
+                        }
+                    });
+        } catch (RejectedExecutionException ex) {
+            log.warn("Milvus local task rejected because another task is running: {}", taskName);
+            return CompletableFuture.failedFuture(ex);
         }
     }
 }

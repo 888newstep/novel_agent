@@ -1,6 +1,7 @@
 package com.novel.agent.service;
 
 import com.novel.agent.entity.NovelFile;
+import com.novel.agent.security.FileAccessPolicy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,12 @@ import java.util.stream.Stream;
 @Service
 public class NovelFileScanner {
 
+    private final FileAccessPolicy fileAccessPolicy;
+
+    public NovelFileScanner(FileAccessPolicy fileAccessPolicy) {
+        this.fileAccessPolicy = fileAccessPolicy;
+    }
+
     @Value("${knowledge.novel-dir:novels/}")
     private String novelDir;
 
@@ -28,10 +35,16 @@ public class NovelFileScanner {
         Set<String> processed = loadProcessedFiles();
         List<NovelFile> unprocessed = new ArrayList<>();
 
-        Path dir = Paths.get(novelDir);
-        if (!Files.exists(dir)) {
-            dir.toFile().mkdirs();
-            log.info("创建 novels 目录: {}", dir.toAbsolutePath());
+        Path dir;
+        try {
+            dir = fileAccessPolicy.resolveAllowedPath(novelDir);
+            if (!Files.exists(dir)) {
+                Files.createDirectories(dir);
+                log.info("Created novels directory: {}", dir.toAbsolutePath());
+            }
+            dir = fileAccessPolicy.requireAllowedDirectory(dir.toString());
+        } catch (IOException | IllegalArgumentException exception) {
+            log.error("Cannot access configured novel directory: {}", novelDir, exception);
             return unprocessed;
         }
 
@@ -39,19 +52,20 @@ public class NovelFileScanner {
             paths.filter(p -> p.toString().endsWith(".txt"))
                     .forEach(p -> {
                         try {
+                            Path safePath = fileAccessPolicy.requireAllowedRegularFile(p.toString());
                             String fileName = p.getFileName().toString();
                             NovelFile file = NovelFile.builder()
                                     .fileName(fileName)
-                                    .filePath(p.toAbsolutePath().toString())
-                                    .fileSize(Files.size(p))
+                                    .filePath(safePath.toString())
+                                    .fileSize(Files.size(safePath))
                                     .processed(processed.contains(fileName))
                                     .build();
                             unprocessed.add(file);
-                        } catch (IOException e) {
+                        } catch (IOException | IllegalArgumentException e) {
                             log.error("读取文件信息失败: {}", p, e);
                         }
                     });
-        } catch (IOException e) {
+        } catch (IOException | IllegalArgumentException e) {
             log.error("扫描目录失败: {}", novelDir, e);
         }
 

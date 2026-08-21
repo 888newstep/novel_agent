@@ -21,13 +21,16 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
+import java.util.function.Supplier;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class EmbeddingService {
 
-    private static final int EMBEDDING_CACHE_SIZE = 512;
+    private static final int MIN_CACHE_SIZE = 64;
+    private static final int MIN_CACHE_MAX_TEXT_CHARS = 32;
 
     private final AiProperties aiProperties;
     private final TokenCostService tokenCostService;
@@ -37,7 +40,10 @@ public class EmbeddingService {
     private String baseUrl;
     private String modelName;
     private int dimension;
+    private int cacheSize;
+    private int cacheMaxTextChars;
     private Map<String, List<Float>> embeddingCache;
+    private final ThreadLocal<Map<String, List<Float>>> requestEmbeddingCache = new ThreadLocal<>();
     private String apiKey;
 
     @PostConstruct
@@ -49,6 +55,8 @@ public class EmbeddingService {
 
         AiProperties.Embedding embeddingConfig = aiProperties.getEmbedding();
         this.provider = embeddingConfig.getProvider();
+        this.cacheSize = Math.max(MIN_CACHE_SIZE, embeddingConfig.getCacheSize());
+        this.cacheMaxTextChars = Math.max(MIN_CACHE_MAX_TEXT_CHARS, embeddingConfig.getCacheMaxTextChars());
 
         switch (provider) {
             case "siliconflow" -> {
@@ -79,19 +87,38 @@ public class EmbeddingService {
             }
         }
 
-        this.embeddingCache = Collections.synchronizedMap(new LinkedHashMap<>(EMBEDDING_CACHE_SIZE, 0.75f, true) {
+        this.embeddingCache = Collections.synchronizedMap(new LinkedHashMap<>(cacheSize, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<String, List<Float>> eldest) {
-                return size() > EMBEDDING_CACHE_SIZE;
+                return size() > cacheSize;
             }
         });
+        log.info("Embedding cache initialized: capacity={}, maxTextChars={}", cacheSize, cacheMaxTextChars);
     }
 
     public String preprocess(String text) {
         if (text == null) {
             return "";
         }
-        return text.trim().replaceAll("\s+", " ");
+        return text.trim().replaceAll("\\s+", " ");
+    }
+
+    /**
+     * Reuses embeddings across multiple searches in one request, including long text
+     * that is intentionally excluded from the process-wide LRU cache.
+     */
+    public <T> T withRequestCache(Supplier<T> action) {
+        Map<String, List<Float>> previous = requestEmbeddingCache.get();
+        requestEmbeddingCache.set(new HashMap<>());
+        try {
+            return action.get();
+        } finally {
+            if (previous == null) {
+                requestEmbeddingCache.remove();
+            } else {
+                requestEmbeddingCache.set(previous);
+            }
+        }
     }
 
     public List<Float> generateEmbedding(String text) {
@@ -100,7 +127,7 @@ public class EmbeddingService {
             return List.of();
         }
 
-        List<Float> cached = embeddingCache.get(cleanText);
+        List<Float> cached = getCachedEmbedding(cleanText);
         if (cached != null) {
             return cached;
         }
@@ -111,7 +138,7 @@ public class EmbeddingService {
         try {
             List<Float> result = callActiveProvider(List.of(cleanText)).get(0);
             List<Float> immutable = List.copyOf(result);
-            embeddingCache.put(cleanText, immutable);
+            cacheEmbedding(cleanText, immutable);
             tokenCostService.recordEmbeddingSuccess(reservation, tokenCostService.estimateTokens(cleanText));
             return immutable;
         } catch (RuntimeException ex) {
@@ -121,7 +148,7 @@ public class EmbeddingService {
                     .orElse(null);
             if (fallback != null) {
                 List<Float> immutable = List.copyOf(fallback);
-                embeddingCache.put(cleanText, immutable);
+                cacheEmbedding(cleanText, immutable);
                 return immutable;
             }
             throw ex;
@@ -131,8 +158,7 @@ public class EmbeddingService {
     public List<List<Float>> batchGenerateEmbedding(List<String> texts) {
         List<String> cleanTexts = texts.stream().map(this::preprocess).toList();
         List<List<Float>> results = new ArrayList<>(Collections.nCopies(cleanTexts.size(), null));
-        List<String> missingTexts = new ArrayList<>();
-        List<Integer> missingIndexes = new ArrayList<>();
+        Map<String, List<Integer>> missingIndexesByText = new LinkedHashMap<>();
 
         for (int i = 0; i < cleanTexts.size(); i++) {
             String cleanText = cleanTexts.get(i);
@@ -140,18 +166,24 @@ public class EmbeddingService {
                 results.set(i, List.of());
                 continue;
             }
-            List<Float> cached = embeddingCache.get(cleanText);
+            List<Float> cached = getCachedEmbedding(cleanText);
             if (cached != null) {
                 results.set(i, cached);
                 continue;
             }
-            missingTexts.add(cleanText);
-            missingIndexes.add(i);
+            missingIndexesByText.computeIfAbsent(cleanText, ignored -> new ArrayList<>()).add(i);
         }
 
-        if (missingTexts.isEmpty()) {
+        if (missingIndexesByText.isEmpty()) {
+            log.debug("Batch embedding served entirely from cache, inputs={}, avoidedTokens={}",
+                    cleanTexts.size(), tokenCostService.estimateTokens(cleanTexts));
             return results;
         }
+        List<String> missingTexts = new ArrayList<>(missingIndexesByText.keySet());
+        int originalTokens = tokenCostService.estimateTokens(cleanTexts);
+        int providerTokens = tokenCostService.estimateTokens(missingTexts);
+        log.debug("Batch embedding compacted, inputs={}, providerInputs={}, avoidedTokens={}",
+                cleanTexts.size(), missingTexts.size(), Math.max(0, originalTokens - providerTokens));
 
         TokenCostService.UsageReservation reservation = tokenCostService.reserveEmbeddingRequest(
                 provider, modelName, "embedding.batch", missingTexts
@@ -159,7 +191,7 @@ public class EmbeddingService {
 
         try {
             List<List<Float>> generated = callActiveProvider(missingTexts);
-            fillGeneratedResults(results, missingTexts, missingIndexes, generated);
+            fillGeneratedResults(results, missingTexts, missingIndexesByText, generated);
             tokenCostService.recordEmbeddingSuccess(reservation, tokenCostService.estimateTokens(missingTexts));
             return results;
         } catch (RuntimeException ex) {
@@ -167,16 +199,17 @@ public class EmbeddingService {
             log.error("Batch embedding failed (batch={}, provider={})", texts.size(), provider, ex);
             List<List<Float>> fallbackGenerated = tryOllamaFallback(missingTexts, "embedding.batch_fallback", ex.getMessage());
             if (!fallbackGenerated.isEmpty()) {
-                fillGeneratedResults(results, missingTexts, missingIndexes, fallbackGenerated);
+                fillGeneratedResults(results, missingTexts, missingIndexesByText, fallbackGenerated);
                 return results;
             }
             for (int i = 0; i < missingTexts.size(); i++) {
                 String missingText = missingTexts.get(i);
                 try {
-                    results.set(missingIndexes.get(i), generateEmbedding(missingText));
+                    List<Float> generated = generateEmbedding(missingText);
+                    missingIndexesByText.get(missingText).forEach(index -> results.set(index, generated));
                 } catch (Exception singleEx) {
                     log.error("Single embedding fallback failed: {}", missingText.substring(0, Math.min(50, missingText.length())), singleEx);
-                    results.set(missingIndexes.get(i), null);
+                    missingIndexesByText.get(missingText).forEach(index -> results.set(index, null));
                 }
             }
             return results;
@@ -185,15 +218,40 @@ public class EmbeddingService {
 
     private void fillGeneratedResults(List<List<Float>> results,
                                       List<String> missingTexts,
-                                      List<Integer> missingIndexes,
+                                      Map<String, List<Integer>> missingIndexesByText,
                                       List<List<Float>> generated) {
         for (int i = 0; i < missingTexts.size(); i++) {
             List<Float> embedding = i < generated.size() ? generated.get(i) : null;
             List<Float> immutable = embedding == null ? null : List.copyOf(embedding);
             if (immutable != null) {
-                embeddingCache.put(missingTexts.get(i), immutable);
+                cacheEmbedding(missingTexts.get(i), immutable);
             }
-            results.set(missingIndexes.get(i), immutable);
+            missingIndexesByText.get(missingTexts.get(i)).forEach(index -> results.set(index, immutable));
+        }
+    }
+
+    private boolean isCacheEligible(String text) {
+        return text.length() <= cacheMaxTextChars;
+    }
+
+    private List<Float> getCachedEmbedding(String text) {
+        Map<String, List<Float>> requestCache = requestEmbeddingCache.get();
+        if (requestCache != null) {
+            List<Float> cached = requestCache.get(text);
+            if (cached != null) {
+                return cached;
+            }
+        }
+        return isCacheEligible(text) ? embeddingCache.get(text) : null;
+    }
+
+    private void cacheEmbedding(String text, List<Float> embedding) {
+        Map<String, List<Float>> requestCache = requestEmbeddingCache.get();
+        if (requestCache != null) {
+            requestCache.put(text, embedding);
+        }
+        if (isCacheEligible(text)) {
+            embeddingCache.put(text, embedding);
         }
     }
 
@@ -301,11 +359,12 @@ public class EmbeddingService {
             throw new RuntimeException("SiliconFlow returned empty response");
         }
 
-        List<Map<String, Object>> data = (List<Map<String, Object>>) response.get("data");
-        if (data == null || data.isEmpty()) {
+        List<Map<String, Object>> responseData = (List<Map<String, Object>>) response.get("data");
+        if (responseData == null || responseData.isEmpty()) {
             throw new RuntimeException("SiliconFlow response missing embedding data");
         }
 
+        List<Map<String, Object>> data = new ArrayList<>(responseData);
         data.sort(Comparator.comparingInt(item -> ((Number) item.getOrDefault("index", 0)).intValue()));
         List<List<Float>> results = new ArrayList<>();
         for (Map<String, Object> item : data) {

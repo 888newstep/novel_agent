@@ -26,6 +26,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
@@ -53,7 +54,7 @@ public class DataImportService {
 
     private final AtomicLong currentProgress = new AtomicLong(0);
     private final AtomicLong totalCount = new AtomicLong(0);
-    private volatile boolean running = false;
+    private final AtomicBoolean running = new AtomicBoolean(false);
     private volatile Map<String, Object> importStatus = createIdleStatus();
 
     public ImportResult importFromJson(String jsonFilePath) {
@@ -64,6 +65,42 @@ public class DataImportService {
      * Imports records for one novel while preserving the legacy novelId=0 path.
      */
     public ImportResult importFromJson(String jsonFilePath, long novelId) {
+        return importFromJson(jsonFilePath, novelId, false);
+    }
+
+    public boolean tryAcquireImportSlot() {
+        return running.compareAndSet(false, true);
+    }
+
+    public void markImportScheduled(String jsonFilePath, long novelId) {
+        updateStatus(Map.of(
+                "running", true,
+                "stage", "scheduled",
+                "filePath", jsonFilePath,
+                "novelId", novelId,
+                "message", "import task scheduled"
+        ));
+    }
+
+    public void releaseReservedImportSlot() {
+        running.set(false);
+        updateStatus(Map.of(
+                "running", false,
+                "stage", "idle",
+                "message", "import task was not scheduled"
+        ));
+    }
+
+    public ImportResult importFromJsonAfterReservation(String jsonFilePath, long novelId) {
+        try {
+            return importFromJson(jsonFilePath, novelId, true);
+        } catch (RuntimeException ex) {
+            running.set(false);
+            throw ex;
+        }
+    }
+
+    private ImportResult importFromJson(String jsonFilePath, long novelId, boolean reserved) {
         if (jsonFilePath == null || jsonFilePath.isBlank()) {
             throw new IllegalArgumentException("import file path must not be blank");
         }
@@ -76,9 +113,16 @@ public class DataImportService {
             throw new IllegalArgumentException("文件不存在: " + jsonFilePath);
         }
 
+        if (reserved) {
+            if (!running.get()) {
+                throw new IllegalStateException();
+            }
+        } else if (!running.compareAndSet(false, true)) {
+            throw new IllegalStateException();
+        }
+
         Path checkpointPath = getCheckpointPath(jsonPath, novelId);
         long startedAt = System.currentTimeMillis();
-        running = true;
         currentProgress.set(0);
         totalCount.set(0);
         importStatus = createIdleStatus();
@@ -172,7 +216,7 @@ public class DataImportService {
             log.error("import failed", ex);
             throw new RuntimeException("导入失败: " + ex.getMessage(), ex);
         } finally {
-            running = false;
+            running.set(false);
             updateStatus(Map.of("running", false));
         }
     }
@@ -203,8 +247,7 @@ public class DataImportService {
                                        long novelId) throws IOException {
         ImportResult result = new ImportResult();
         long processed = 0;
-        int batchCount = 0;
-        int flushCount = 0;
+        BatchProgress progress = new BatchProgress(0, 0);
         List<JsonObject> batch = new ArrayList<>();
         List<String> embedTexts = new ArrayList<>();
 
@@ -227,18 +270,8 @@ public class DataImportService {
                 try {
                     appendTrainingRows(batch, embedTexts, json, processed, novelId, result);
                     if (batch.size() >= batchSize) {
-                        batchCount++;
-                        processBatch(batch, embedTexts, result, processed, batchCount, flushCount, novelId, "importing_array");
-                        if (batchCount % AUTO_FLUSH_BATCH_INTERVAL == 0) {
-                            flushCount++;
-                            flushSegments();
-                            updateStatus(Map.of(
-                                    "stage", "flushing",
-                                    "flushCount", (long) flushCount,
-                                    "message", "auto flush after batch window"
-                            ));
-                        }
-                        checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "checkpoint_saved");
+                        progress = submitBatch(batch, embedTexts, result, processed, novelId,
+                                "importing_array", checkpointPath, progress, true);
                     }
                 } catch (IllegalStateException ex) {
                     throw ex;
@@ -246,33 +279,18 @@ public class DataImportService {
                     log.warn("array record {} parse failed: {}", processed, ex.getMessage());
                     result.failCount++;
                     result.totalProcessed++;
-                    checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "record_skipped");
+                    checkpointProgress(checkpointPath, processed, result,
+                            progress.batchCount(), progress.flushCount(), "record_skipped");
                 }
             }
             reader.endArray();
         }
 
         if (!batch.isEmpty()) {
-            batchCount++;
-            processBatch(batch, embedTexts, result, processed, batchCount, flushCount, novelId, "importing_array");
-            checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "checkpoint_saved");
+            progress = submitBatch(batch, embedTexts, result, processed, novelId,
+                    "importing_array", checkpointPath, progress, false);
         }
-
-        flushCount++;
-        flushSegments();
-        updateStatus(Map.of(
-                "stage", "final_flush",
-                "flushCount", (long) flushCount,
-                "processedRecords", processed,
-                "successCount", result.successCount,
-                "failCount", result.failCount,
-                "batchCount", (long) batchCount,
-                "retryCount", result.retryCount,
-                "message", "final flush completed"
-        ));
-        result.batchCount = batchCount;
-        result.flushCount = flushCount;
-        return result;
+        return finishImport(result, processed, progress);
     }
 
     private JsonObject readJsonObject(JsonReader reader) throws IOException {
@@ -302,8 +320,7 @@ public class DataImportService {
         ImportResult result = new ImportResult();
         long processed = skipLines;
         long lineNum = 0;
-        int batchCount = 0;
-        int flushCount = 0;
+        BatchProgress progress = new BatchProgress(0, 0);
         List<JsonObject> batch = new ArrayList<>();
         List<String> embedTexts = new ArrayList<>();
 
@@ -329,18 +346,8 @@ public class DataImportService {
                     processed = lineNum;
                     appendTrainingRows(batch, embedTexts, json, processed, novelId, result);
                     if (batch.size() >= batchSize) {
-                        batchCount++;
-                        processBatch(batch, embedTexts, result, processed, batchCount, flushCount, novelId, "importing_lines");
-                        if (batchCount % AUTO_FLUSH_BATCH_INTERVAL == 0) {
-                            flushCount++;
-                            flushSegments();
-                            updateStatus(Map.of(
-                                    "stage", "flushing",
-                                    "flushCount", (long) flushCount,
-                                    "message", "auto flush after batch window"
-                            ));
-                        }
-                        checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "checkpoint_saved");
+                        progress = submitBatch(batch, embedTexts, result, processed, novelId,
+                                "importing_lines", checkpointPath, progress, true);
                     }
                 } catch (IllegalStateException ex) {
                     throw ex;
@@ -349,18 +356,47 @@ public class DataImportService {
                     result.failCount++;
                     result.totalProcessed++;
                     processed = lineNum;
-                    checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "record_skipped");
+                    checkpointProgress(checkpointPath, processed, result,
+                            progress.batchCount(), progress.flushCount(), "record_skipped");
                 }
             }
         }
 
         if (!batch.isEmpty()) {
-            batchCount++;
-            processBatch(batch, embedTexts, result, processed, batchCount, flushCount, novelId, "importing_lines");
-            checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "checkpoint_saved");
+            progress = submitBatch(batch, embedTexts, result, processed, novelId,
+                    "importing_lines", checkpointPath, progress, false);
         }
+        return finishImport(result, processed, progress);
+    }
 
-        flushCount++;
+    private BatchProgress submitBatch(List<JsonObject> batch,
+                                      List<String> embedTexts,
+                                      ImportResult result,
+                                      long processed,
+                                      long novelId,
+                                      String sourceStage,
+                                      Path checkpointPath,
+                                      BatchProgress progress,
+                                      boolean allowAutoFlush) {
+        int batchCount = progress.batchCount() + 1;
+        processBatch(batch, embedTexts, result, processed, batchCount, progress.flushCount(), novelId, sourceStage);
+
+        int flushCount = progress.flushCount();
+        if (allowAutoFlush && batchCount % AUTO_FLUSH_BATCH_INTERVAL == 0) {
+            flushCount++;
+            flushSegments();
+            updateStatus(Map.of(
+                    "stage", "flushing",
+                    "flushCount", (long) flushCount,
+                    "message", "auto flush after batch window"
+            ));
+        }
+        checkpointProgress(checkpointPath, processed, result, batchCount, flushCount, "checkpoint_saved");
+        return new BatchProgress(batchCount, flushCount);
+    }
+
+    private ImportResult finishImport(ImportResult result, long processed, BatchProgress progress) {
+        int flushCount = progress.flushCount() + 1;
         flushSegments();
         updateStatus(Map.of(
                 "stage", "final_flush",
@@ -368,11 +404,11 @@ public class DataImportService {
                 "processedRecords", processed,
                 "successCount", result.successCount,
                 "failCount", result.failCount,
-                "batchCount", (long) batchCount,
+                "batchCount", (long) progress.batchCount(),
                 "retryCount", result.retryCount,
                 "message", "final flush completed"
         ));
-        result.batchCount = batchCount;
+        result.batchCount = progress.batchCount();
         result.flushCount = flushCount;
         return result;
     }
@@ -436,64 +472,46 @@ public class DataImportService {
         BatchRange batchRange = extractChapterRange(rows);
         String retryRange = batchRange.displayValue();
         Exception lastException = null;
+        PreparedBatch preparedBatch = null;
 
         for (int attempt = 1; attempt <= safeMaxRetries; attempt++) {
             try {
                 if (attempt > 1) {
                     long retryCount = attempt - 1L;
                     result.retryCount++;
-                    Map<String, Object> retryPatch = new LinkedHashMap<>();
-                    retryPatch.put("stage", "retrying_batch");
-                    retryPatch.put("processedRecords", processed);
-                    retryPatch.put("batchCount", (long) batchCount);
-                    retryPatch.put("flushCount", (long) flushCount);
-                    retryPatch.put("currentBatchSize", rows.size());
-                    retryPatch.put("successCount", result.successCount);
-                    retryPatch.put("failCount", result.failCount);
-                    retryPatch.put("retryCount", result.retryCount);
+                    Map<String, Object> retryPatch = buildBatchStatusPatch(
+                            "retrying_batch", processed, batchCount, flushCount, rows.size(), result,
+                            "retrying failed batch after cleanup", sourceStage);
                     retryPatch.put("lastRetriedRange", retryRange);
-                    retryPatch.put("lastRetryReason", lastException == null || lastException.getMessage() == null
-                            ? "batch failed"
-                            : lastException.getMessage());
-                    retryPatch.put("message", "retrying failed batch after cleanup");
-                    retryPatch.put("sourceStage", sourceStage);
+                    retryPatch.put("lastRetryReason", failureMessage(lastException));
                     updateStatus(retryPatch);
 
                     sleepBackoff(retryCount);
                     deleteSegmentRange(batchRange, novelId);
                 }
 
-                Map<String, Object> embeddingPatch = new LinkedHashMap<>();
-                embeddingPatch.put("stage", "embedding_batch");
-                embeddingPatch.put("processedRecords", processed);
-                embeddingPatch.put("batchCount", (long) batchCount);
-                embeddingPatch.put("flushCount", (long) flushCount);
-                embeddingPatch.put("currentBatchSize", rows.size());
-                embeddingPatch.put("successCount", result.successCount);
-                embeddingPatch.put("failCount", result.failCount);
-                embeddingPatch.put("retryCount", result.retryCount);
-                embeddingPatch.put("message", attempt == 1
-                        ? "generating embeddings for current batch"
-                        : "regenerating embeddings for retried batch");
-                embeddingPatch.put("sourceStage", sourceStage);
-                updateStatus(embeddingPatch);
+                if (preparedBatch == null) {
+                    updateStatus(buildBatchStatusPatch(
+                            "embedding_batch", processed, batchCount, flushCount, rows.size(), result,
+                            attempt == 1
+                                    ? "generating embeddings for current batch"
+                                    : "regenerating embeddings after embedding failure",
+                            sourceStage));
 
-                List<List<Float>> embeddings = embeddingService.batchGenerateEmbedding(embedTexts);
-                PreparedBatch preparedBatch = buildPreparedBatch(rows, embeddings);
+                    List<List<Float>> embeddings = embeddingService.batchGenerateEmbedding(embedTexts);
+                    preparedBatch = buildPreparedBatch(rows, embeddings);
+                } else {
+                    updateStatus(buildBatchStatusPatch(
+                            "embedding_reused", processed, batchCount, flushCount,
+                            preparedBatch.validRows().size(), result,
+                            "reusing embeddings for insert retry", sourceStage));
+                }
 
                 if (!preparedBatch.validRows().isEmpty()) {
-                    Map<String, Object> insertingPatch = new LinkedHashMap<>();
-                    insertingPatch.put("stage", "inserting_batch");
-                    insertingPatch.put("processedRecords", processed);
-                    insertingPatch.put("batchCount", (long) batchCount);
-                    insertingPatch.put("flushCount", (long) flushCount);
-                    insertingPatch.put("currentBatchSize", preparedBatch.validRows().size());
-                    insertingPatch.put("successCount", result.successCount);
-                    insertingPatch.put("failCount", result.failCount);
-                    insertingPatch.put("retryCount", result.retryCount);
-                    insertingPatch.put("message", "inserting batch into milvus");
-                    insertingPatch.put("sourceStage", sourceStage);
-                    updateStatus(insertingPatch);
+                    updateStatus(buildBatchStatusPatch(
+                            "inserting_batch", processed, batchCount, flushCount,
+                            preparedBatch.validRows().size(), result,
+                            "inserting batch into milvus", sourceStage));
 
                     milvusClient.insert(InsertReq.builder()
                             .collectionName(segmentsCollection)
@@ -527,24 +545,12 @@ public class DataImportService {
         rows.clear();
         embedTexts.clear();
 
-        Map<String, Object> failedPatch = new LinkedHashMap<>();
-        failedPatch.put("stage", "batch_failed");
-        failedPatch.put("processedRecords", processed);
-        failedPatch.put("batchCount", (long) batchCount);
-        failedPatch.put("flushCount", (long) flushCount);
-        failedPatch.put("currentBatchSize", failedRows);
-        failedPatch.put("successCount", result.successCount);
-        failedPatch.put("failCount", result.failCount);
-        failedPatch.put("retryCount", result.retryCount);
+        Map<String, Object> failedPatch = buildBatchStatusPatch(
+                "batch_failed", processed, batchCount, flushCount, failedRows, result,
+                "batch processing failed after retries", sourceStage);
         failedPatch.put("lastRetriedRange", retryRange);
-        failedPatch.put("lastRetryReason", lastException == null || lastException.getMessage() == null
-                ? "batch failed"
-                : lastException.getMessage());
-        failedPatch.put("lastError", lastException == null || lastException.getMessage() == null
-                ? "batch failed"
-                : lastException.getMessage());
-        failedPatch.put("message", "batch processing failed after retries");
-        failedPatch.put("sourceStage", sourceStage);
+        failedPatch.put("lastRetryReason", failureMessage(lastException));
+        failedPatch.put("lastError", failureMessage(lastException));
         updateStatus(failedPatch);
 
         log.error("batch processing failed after {} attempts, range={}, rows={}",
@@ -553,6 +559,34 @@ public class DataImportService {
                 failedRows,
                 lastException);
         throw new IllegalStateException("batch processing failed after retries", lastException);
+    }
+
+    private Map<String, Object> buildBatchStatusPatch(String stage,
+                                                      long processed,
+                                                      int batchCount,
+                                                      int flushCount,
+                                                      int currentBatchSize,
+                                                      ImportResult result,
+                                                      String message,
+                                                      String sourceStage) {
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("stage", stage);
+        patch.put("processedRecords", processed);
+        patch.put("batchCount", (long) batchCount);
+        patch.put("flushCount", (long) flushCount);
+        patch.put("currentBatchSize", currentBatchSize);
+        patch.put("successCount", result.successCount);
+        patch.put("failCount", result.failCount);
+        patch.put("retryCount", result.retryCount);
+        patch.put("message", message);
+        patch.put("sourceStage", sourceStage);
+        return patch;
+    }
+
+    private String failureMessage(Exception exception) {
+        return exception == null || exception.getMessage() == null
+                ? "batch failed"
+                : exception.getMessage();
     }
 
     private PreparedBatch buildPreparedBatch(List<JsonObject> rows, List<List<Float>> embeddings) {
@@ -701,7 +735,7 @@ public class DataImportService {
     }
 
     public boolean isRunning() {
-        return running;
+        return running.get();
     }
 
     public Map<String, Object> getImportStatus() {
@@ -809,6 +843,9 @@ public class DataImportService {
     }
 
     private record PreparedBatch(List<JsonObject> validRows, int invalidCount) {
+    }
+
+    private record BatchProgress(int batchCount, int flushCount) {
     }
 
     private record BatchRange(long fromChapter, long toChapter) {

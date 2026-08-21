@@ -134,11 +134,10 @@ Before starting the application, verify the local/cloud dependency boundary:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-infrastructure.ps1 `
   -MilvusHost $env:MILVUS_HOST `
-  -RabbitMqHost $env:RABBITMQ_HOST `
   -OutputPath artifacts/infrastructure-preflight.json
 ```
 
-The script requires MySQL, Milvus, and the embedding provider for the RAG/import path. Redis and RabbitMQ are reported as optional because they are not current critical-path dependencies.
+The script checks only the dependencies used by this single-node project: MySQL, Milvus, and the embedding provider for the RAG/import path.
 
 ```powershell
 mvn test -DskipITs

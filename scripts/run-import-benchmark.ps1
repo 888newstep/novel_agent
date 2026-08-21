@@ -16,6 +16,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $BaseUrl = $BaseUrl.TrimEnd('/')
 $resolvedFilePath = (Resolve-Path -LiteralPath $FilePath).Path
+$adminHeaders = @{}
+if (-not [string]::IsNullOrWhiteSpace($env:NOVEL_AGENT_ADMIN_API_KEY)) {
+    $adminHeaders['X-Admin-Api-Key'] = $env:NOVEL_AGENT_ADMIN_API_KEY
+}
 
 # 0 is the historical shared corpus. A benchmark gets an isolated id by default.
 if ($NovelId -eq 0) {
@@ -29,7 +33,7 @@ $statusUri = '{0}/api/import/status' -f $BaseUrl
 $startedAt = Get-Date
 
 try {
-    $startResponse = Invoke-RestMethod -Method Post -Uri $startUri
+    $startResponse = Invoke-RestMethod -Method Post -Uri $startUri -Headers $adminHeaders
 } catch {
     Write-Error ("Import benchmark could not start: {0}" -f $_.Exception.Message)
     exit 1
@@ -45,7 +49,7 @@ $status = $null
 do {
     Start-Sleep -Seconds $PollIntervalSeconds
     try {
-        $status = Invoke-RestMethod -Method Get -Uri $statusUri
+        $status = Invoke-RestMethod -Method Get -Uri $statusUri -Headers $adminHeaders
     } catch {
         Write-Error ("Import status request failed: {0}" -f $_.Exception.Message)
         exit 1
@@ -85,7 +89,7 @@ $summary = [ordered]@{
 if ($Cleanup -and $status.stage -eq 'completed') {
     $cleanupUri = '{0}/api/v1/novel/admin/milvus/novel/{1}' -f $BaseUrl, $NovelId
     try {
-        Invoke-RestMethod -Method Delete -Uri $cleanupUri | Out-Null
+        Invoke-RestMethod -Method Delete -Uri $cleanupUri -Headers $adminHeaders | Out-Null
         $summary.cleanupSucceeded = $true
     } catch {
         $summary.lastError = "cleanup failed: $($_.Exception.Message)"
