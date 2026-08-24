@@ -93,6 +93,7 @@ public class NovelController {
         Novel novel = novelRepository.findById(novelId).orElse(null);
         String worldSetting = novel != null ? novel.getWorldSetting() : "";
         MilvusSearchService.WritingMemory memory = milvusSearchService.buildWritingMemory(novelId, topic, currentChapterNum);
+        Integer effectiveChapterNum = memory.getCurrentChapterNum();
 
         String promptStyle = trimText(style, 60);
         String promptTopic = trimText(topic, 400);
@@ -105,7 +106,7 @@ public class NovelController {
                 novelId,
                 topic,
                 style,
-                currentChapterNum,
+                effectiveChapterNum,
                 promptId,
                 worldSetting,
                 memory,
@@ -178,11 +179,12 @@ public class NovelController {
         MilvusSearchService.WritingMemory memory = milvusSearchService.buildWritingMemory(novelId, query, currentChapterNum);
         Map<String, Object> response = new HashMap<>();
         response.put("query", query);
-        response.put("currentChapterNum", currentChapterNum);
+        response.put("currentChapterNum", memory.getCurrentChapterNum());
         response.put("memory", memory);
         response.put("summary", buildMemorySummary(memory));
         response.put("memoryLayers", buildMemoryLayers(memory));
-        response.put("consistencyCheck", buildConsistencyCheck(novelId, memory, currentChapterNum));
+        response.put("consistencyCheck", buildConsistencyCheck(
+                novelId, memory, memory.getCurrentChapterNum()));
         return ResponseEntity.ok(response);
     }
 

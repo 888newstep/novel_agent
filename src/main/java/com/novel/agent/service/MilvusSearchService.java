@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -182,9 +183,13 @@ public class MilvusSearchService {
 
     public WritingMemory buildWritingMemory(Long novelId, String queryText, Integer currentChapterNum) {
         return embeddingService.withRequestCache(() -> {
-            List<Map<String, Object>> recentChapters = loadRecentChapters(novelId, currentChapterNum, retrievalProperties.getMemory().getRecentChapterLimit());
-            List<Map<String, Object>> segments = searchSegments(novelId, queryText, retrievalProperties.getMemory().getSegmentLimit() + 1, currentChapterNum);
-            List<Map<String, Object>> hooks = searchUnresolvedEvents(novelId, queryText, retrievalProperties.getMemory().getHookLimit() + 1, currentChapterNum);
+            List<Chapter> chapters = chapterRepository.findByNovelIdOrderByChapterNumAsc(novelId);
+            Integer effectiveChapterNum = resolveCurrentChapterNum(currentChapterNum, chapters);
+            List<Map<String, Object>> recentChapters = loadRecentChapters(
+                    chapters, effectiveChapterNum, retrievalProperties.getMemory().getRecentChapterLimit());
+            prewarmMemoryQueryEmbeddings(queryText, effectiveChapterNum);
+            List<Map<String, Object>> segments = searchSegments(novelId, queryText, retrievalProperties.getMemory().getSegmentLimit() + 1, effectiveChapterNum);
+            List<Map<String, Object>> hooks = searchUnresolvedEvents(novelId, queryText, retrievalProperties.getMemory().getHookLimit() + 1, effectiveChapterNum);
             List<Map<String, Object>> characters = searchCharacters(novelId, queryText, retrievalProperties.getMemory().getCharacterLimit());
             List<Map<String, Object>> items = searchItems(novelId, queryText, retrievalProperties.getMemory().getItemLimit() + 1, null);
             List<Map<String, Object>> factions = searchFactionOrInspiration(novelId, queryText, retrievalProperties.getMemory().getFactionLimit() + 1, 0);
@@ -192,7 +197,7 @@ public class MilvusSearchService {
 
             return WritingMemory.builder()
                     .query(queryText)
-                    .currentChapterNum(currentChapterNum)
+                    .currentChapterNum(effectiveChapterNum)
                     .recentChapters(limitResults(recentChapters, retrievalProperties.getMemory().getRecentChapterLimit()))
                     .segments(limitResults(segments, retrievalProperties.getMemory().getSegmentLimit()))
                     .hooks(limitResults(hooks, retrievalProperties.getMemory().getHookLimit()))
@@ -209,6 +214,42 @@ public class MilvusSearchService {
                             + Math.min(relations.size(), retrievalProperties.getMemory().getRelationLimit()))
                     .build();
         });
+    }
+
+    /** 将一次记忆组装需要的不同检索提示合并成一个 embedding 批次。 */
+    private void prewarmMemoryQueryEmbeddings(String queryText, Integer currentChapterNum) {
+        String boundedQuery = normalizeAndLimitQuery(queryText);
+        if (boundedQuery.isBlank()) {
+            return;
+        }
+        LinkedHashSet<String> variants = new LinkedHashSet<>();
+        variants.addAll(buildQueryVariants(
+                boundedQuery, retrievalProperties.getHints().getSegment(), currentChapterNum));
+        variants.addAll(buildQueryVariants(
+                boundedQuery, retrievalProperties.getHints().getEvent(), currentChapterNum));
+        variants.addAll(buildQueryVariants(
+                boundedQuery, retrievalProperties.getHints().getCharacter(), null));
+        variants.addAll(buildQueryVariants(
+                boundedQuery, retrievalProperties.getHints().getItem(), null));
+        variants.addAll(buildQueryVariants(
+                boundedQuery, retrievalProperties.getHints().getFaction(), null));
+        embeddingService.batchGenerateEmbedding(List.copyOf(variants));
+    }
+
+    private Integer resolveCurrentChapterNum(Integer requestedChapterNum, List<Chapter> chapters) {
+        if (requestedChapterNum != null) {
+            return requestedChapterNum;
+        }
+        int latestChapterNum = chapters == null ? 0 : chapters.stream()
+                .map(Chapter::getChapterNum)
+                .filter(Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .max()
+                .orElse(0);
+        if (latestChapterNum <= 0) {
+            return null;
+        }
+        return latestChapterNum == Integer.MAX_VALUE ? latestChapterNum : latestChapterNum + 1;
     }
 
     private List<Map<String, Object>> hybridSearch(String collectionName,
@@ -636,8 +677,13 @@ public class MilvusSearchService {
         return new ArrayList<>(keywords);
     }
 
-    private List<Map<String, Object>> loadRecentChapters(Long novelId, Integer currentChapterNum, int limit) {
-        List<Chapter> chapters = chapterRepository.findByNovelIdOrderByChapterNumAsc(novelId).stream()
+    private List<Map<String, Object>> loadRecentChapters(List<Chapter> chapterRecords,
+                                                          Integer currentChapterNum,
+                                                          int limit) {
+        if (chapterRecords == null || chapterRecords.isEmpty() || limit <= 0) {
+            return List.of();
+        }
+        List<Chapter> chapters = chapterRecords.stream()
                 .filter(chapter -> currentChapterNum == null || chapter.getChapterNum() <= currentChapterNum)
                 .collect(Collectors.toList());
         if (chapters.isEmpty()) {
@@ -645,7 +691,9 @@ public class MilvusSearchService {
         }
 
         int fromIndex = Math.max(0, chapters.size() - limit);
-        return chapters.subList(fromIndex, chapters.size()).stream()
+        List<Chapter> newestFirst = new ArrayList<>(chapters.subList(fromIndex, chapters.size()));
+        Collections.reverse(newestFirst);
+        return newestFirst.stream()
                 .map(chapter -> {
                     Map<String, Object> item = new LinkedHashMap<>();
                     item.put("chapter_num", chapter.getChapterNum());

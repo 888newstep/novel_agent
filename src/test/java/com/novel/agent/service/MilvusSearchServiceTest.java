@@ -1,6 +1,7 @@
 package com.novel.agent.service;
 
 import com.novel.agent.config.RetrievalProperties;
+import com.novel.agent.entity.Chapter;
 import com.novel.agent.entity.KeyEvent;
 import com.novel.agent.repository.ChapterRepository;
 import com.novel.agent.repository.KeyEventRepository;
@@ -15,16 +16,69 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MilvusSearchServiceTest {
+
+    @Test
+    void infersNextChapterAndKeepsNewestSummariesFirst() {
+        MilvusClientV2 milvusClient = mock(MilvusClientV2.class);
+        EmbeddingService embeddingService = mock(EmbeddingService.class);
+        ChapterRepository chapterRepository = mock(ChapterRepository.class);
+        KeyEventRepository keyEventRepository = mock(KeyEventRepository.class);
+        RelationRepository relationRepository = mock(RelationRepository.class);
+        RetrievalProperties retrievalProperties = new RetrievalProperties();
+        MilvusSearchService service = new MilvusSearchService(
+                milvusClient,
+                embeddingService,
+                chapterRepository,
+                keyEventRepository,
+                relationRepository,
+                retrievalProperties
+        );
+
+        doAnswer(invocation -> ((Supplier<?>) invocation.getArgument(0)).get())
+                .when(embeddingService).withRequestCache(any());
+        when(embeddingService.batchGenerateEmbedding(any())).thenAnswer(invocation -> {
+            List<?> texts = invocation.getArgument(0, List.class);
+            return texts.stream().map(ignored -> List.of(0.1f, 0.2f)).toList();
+        });
+        when(milvusClient.search(any(SearchReq.class))).thenReturn(response());
+        when(chapterRepository.findByNovelIdOrderByChapterNumAsc(1L)).thenReturn(List.of(
+                Chapter.builder().chapterNum(5).title("第五章").summary("旧线索").build(),
+                Chapter.builder().chapterNum(7).title("第七章").summary("进入山门").build(),
+                Chapter.builder().chapterNum(8).title("第八章").summary("试炼开始").build()
+        ));
+        when(keyEventRepository.findByNovelIdAndResolvedFalse(1L)).thenReturn(List.of());
+        when(relationRepository.findByNovelId(1L)).thenReturn(List.of());
+
+        MilvusSearchService.WritingMemory memory =
+                service.buildWritingMemory(1L, "山门试炼", null);
+
+        assertEquals(9, memory.getCurrentChapterNum());
+        assertEquals(List.of(8, 7, 5), memory.getRecentChapters().stream()
+                .map(item -> item.get("chapter_num"))
+                .toList());
+        assertEquals(List.of(1, 2, 4), memory.getRecentChapters().stream()
+                .map(item -> item.get("chapterDistance"))
+                .toList());
+        verify(embeddingService).batchGenerateEmbedding(List.of(
+                "山门试炼",
+                "山门试炼 " + retrievalProperties.getHints().getCurrentChapter(),
+                "山门试炼 " + retrievalProperties.getHints().getCharacter(),
+                "山门试炼 " + retrievalProperties.getHints().getItem(),
+                "山门试炼 " + retrievalProperties.getHints().getFaction()
+        ));
+    }
 
     @Test
     void writingDefaultRankingImprovesContinuationTopOneAgainstRawVectorScore() {

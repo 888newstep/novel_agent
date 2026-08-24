@@ -83,12 +83,13 @@ class NovelControllerTest {
                 .totalCount(10)
                 .build();
 
-        when(milvusSearchService.buildWritingMemory(1L, "trial arc", 10)).thenReturn(memory);
+        when(milvusSearchService.buildWritingMemory(1L, "trial arc", null)).thenReturn(memory);
 
-        ResponseEntity<Map<String, Object>> response = controller.previewMemory(1L, "trial arc", 10);
+        ResponseEntity<Map<String, Object>> response = controller.previewMemory(1L, "trial arc", null);
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(response.getBody()).containsKeys("memoryLayers", "consistencyCheck");
+        assertThat(response.getBody().get("currentChapterNum")).isEqualTo(10);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> memoryLayers = (Map<String, Object>) response.getBody().get("memoryLayers");
