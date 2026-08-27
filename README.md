@@ -46,6 +46,7 @@ See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walk
 - Chapter generation orchestration built around DeepSeek prompts and retrieved context.
 - Token cost governance with budget limits, usage history, and a lightweight dashboard.
 - RAG evaluation workflows for recall, precision, MRR, keyword coverage, and latency.
+- Measured retrieval quality: Recall@5 **93.3%** (14/15, three-run stable) with MRR **0.933** on the Chinese writing-memory evaluation (`R3-ZH-LIVE-20260827`).
 - Prometheus-compatible operational metrics for RAG evaluations, latency, skips, and persistence failures.
 - Import checkpoints, progress snapshots, retry cleanup, and failure propagation for large datasets.
 - Per-request, per-novel, per-model, daily, and monthly token governance with useful degraded responses.
@@ -54,14 +55,14 @@ See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the complete interview walk
 
 | Area | Current capability | Evidence |
 |------|--------------------|----------|
-| Retrieval quality | Writing-specific dataset with `Recall@K`, `Precision@K`, `MRR`, context size, `P95`, and `P99` | `docs/BENCHMARK_REPORT.md` |
+| Retrieval quality | Recall@5 **93.3%** (14/15, three-run stable) and MRR **0.933** on 15 Chinese writing scenarios; full metric set `Recall@K`, `Precision@K`, `MRR`, `P95`, `P99` | `docs/BENCHMARK_REPORT.md` |
 | Generation control | Layered memory, consistency warnings, trace output, and post-generation checks | `src/main/java/com/novel/agent/controller/NovelController.java` |
 | Import stability | Streaming import, novel-scoped checkpoints, progress reporting, and idempotent retries | `src/main/java/com/novel/agent/service/DataImportService.java` |
 | Cost governance | Scoped budgets, degradation events, model fallback, and outline fallback | `src/main/java/com/novel/agent/service/TokenCostService.java` |
 | Evaluation history | MySQL aggregate snapshots with in-memory fallback; query details and novel text are not persisted | `src/main/java/com/novel/agent/service/RagEvaluationService.java` |
 | Operational observability | Actuator `/actuator/prometheus`, low-cardinality RAG counters/timers/latest gauges, and restart restoration | `docs/OBSERVABILITY.md` |
 | Dependency hygiene | Security-fixed transitive baselines, Dependabot, and PR dependency review | `docs/DEPENDENCY_SECURITY.md` |
-| Regression safety | 37 automated service and controller contract tests | `docs/TEST_MATRIX.md` |
+| Regression safety | 62 automated service and controller contract tests | `docs/TEST_MATRIX.md` |
 
 ## Tech Stack
 
@@ -190,7 +191,7 @@ The default application address is `http://localhost:8080`.
 
 ## Verification Baseline
 
-The current repository includes 37 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, evaluation history, Prometheus metric contracts, and controller APIs.
+The current repository includes 62 automated tests covering retrieval, generation response contracts, cost governance, degradation behavior, import retries, evaluation history, Prometheus metric contracts, and controller APIs.
 
 ```powershell
 mvn test -DskipITs
