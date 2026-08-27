@@ -665,6 +665,15 @@ public class MilvusSearchService {
             String trimmed = token.trim();
             if (trimmed.length() >= 2) {
                 keywords.add(trimmed);
+                // 中文称呼/职称核心词多在尾部（师兄、宫主、长老、宗主…），
+                // 对 3 字及以上中文 token 补充尾 2 字子串，使带姓称呼（如"萧师兄"）
+                // 也能命中语料中仅含核心称呼词的片段；英文/数字 token 不做子串切分。
+                if (trimmed.length() >= 3 && containsHan(trimmed)) {
+                    String tail = trimmed.substring(trimmed.length() - 2);
+                    if (!keywords.contains(tail)) {
+                        keywords.add(tail);
+                    }
+                }
             }
             if (keywords.size() >= 5) {
                 break;
@@ -675,6 +684,15 @@ public class MilvusSearchService {
             keywords.add(queryText.trim().toLowerCase(Locale.ROOT));
         }
         return new ArrayList<>(keywords);
+    }
+
+    private boolean containsHan(String token) {
+        for (int i = 0; i < token.length(); i++) {
+            if (Character.UnicodeScript.of(token.charAt(i)) == Character.UnicodeScript.HAN) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<Map<String, Object>> loadRecentChapters(List<Chapter> chapterRecords,

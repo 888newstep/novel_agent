@@ -231,3 +231,12 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - root causes: `少宫主` has a single relevant segment that stays below the vector candidate pool; `萧师兄` lacks Chinese tokenization in keyword extraction so the exact keyword never matches corpus text
 - tradeoff: this is a 15-query operational baseline, not a capacity claim; the character_profile bucket is the next tuning target if the number needs to rise above 86.7%
 - evidence: `docs/benchmarks/rag-evaluation-zh-live-20260827.json`, `docs/BENCHMARK_REPORT.md`, `docs/METRICS_BASELINE.md`
+
+### 2026-08-27 (character_profile fix: Chinese tail-substring keyword extraction)
+
+- topic: recovering `萧师兄` (character_profile) recall via Chinese tokenization in keyword extraction
+- problem: R2 left `萧师兄` unmatched because `extractKeywords` tokenizes Chinese phrases as a whole word (`萧师兄`) and the corpus has no fragment containing the exact three characters, so keyword boosting never fired
+- change: `extractKeywords` now appends the tail-2-character substring for Chinese tokens of length >= 3 (`萧师兄` -> `萧师兄` + `师兄`); `buildQueryVariants` consequently adds a keyword variant; `containsHan` guards English/numeric tokens
+- result: R3-ZH-LIVE-20260827 Recall@5 `93.3%` in all three runs (14/15); `萧师兄` matched at Top-1; only `少宫主` remains unmatched (single relevant segment below the vector candidate pool); no regression in the other 13 cases; full Maven suite 62 tests green
+- tradeoff: every Chinese 3+ char query gains one extra keyword variant (slightly more embedding calls); rare generic tails (`之地`/`极门`) add negligible noise at 0.10 keyword weight
+- evidence: `src/main/java/com/novel/agent/service/MilvusSearchService.java`, `src/test/java/com/novel/agent/service/MilvusSearchServiceTest.java`, `docs/benchmarks/rag-evaluation-zh-live-r3-20260827.json`, `docs/BENCHMARK_REPORT.md`

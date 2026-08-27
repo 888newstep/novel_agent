@@ -73,6 +73,7 @@ class MilvusSearchServiceTest {
                 .toList());
         verify(embeddingService).batchGenerateEmbedding(List.of(
                 "山门试炼",
+                "山门试炼 试炼",
                 "山门试炼 " + retrievalProperties.getHints().getCurrentChapter(),
                 "山门试炼 " + retrievalProperties.getHints().getCharacter(),
                 "山门试炼 " + retrievalProperties.getHints().getItem(),

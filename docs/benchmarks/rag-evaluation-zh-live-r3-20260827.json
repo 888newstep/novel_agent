@@ -1,0 +1,139 @@
+{
+  "runId": "R3-ZH-LIVE-20260827",
+  "status": "verified",
+  "runDate": "2026-08-27",
+  "profileName": "writing-zh-live-v1",
+  "datasetVersion": "2026-08-10",
+  "novelId": 0,
+  "topK": 5,
+  "queryCount": 15,
+  "repetitions": 3,
+  "environment": {
+    "mysql": "configured_and_connected",
+    "milvus": "configured_and_reachable",
+    "embeddingProvider": "configured_and_used"
+  },
+  "aggregate": {
+    "recallAtK": {
+      "mean": 93.33333333333333,
+      "min": 93.33333333333333,
+      "max": 93.33333333333333
+    },
+    "precisionAtK": {
+      "mean": 51.111111111111114,
+      "min": 50.66666666666667,
+      "max": 52.0
+    },
+    "mrr": {
+      "mean": 0.9333333333333332,
+      "min": 0.9333333333333333,
+      "max": 0.9333333333333333
+    },
+    "keywordCoverage": 85.18518518518519,
+    "avgLatencyMs": {
+      "mean": 191.75555555555556,
+      "min": 105.33333333333333,
+      "max": 363.0
+    },
+    "p95LatencyMs": {
+      "mean": 683.0,
+      "min": 166.0,
+      "max": 1665.0
+    },
+    "p99LatencyMs": {
+      "mean": 683.0,
+      "min": 166.0,
+      "max": 1665.0
+    },
+    "avgRetrievedContextChars": 2247.4,
+    "avgRetrievedContextTokens": 562.0
+  },
+  "runs": [
+    {
+      "runNumber": 1,
+      "recallAtK": 93.33333333333333,
+      "precisionAtK": 50.66666666666667,
+      "mrr": 0.9333333333333333,
+      "keywordCoverage": 85.18518518518519,
+      "avgLatencyMs": 363.0,
+      "p95LatencyMs": 1665.0,
+      "p99LatencyMs": 1665.0
+    },
+    {
+      "runNumber": 2,
+      "recallAtK": 93.33333333333333,
+      "precisionAtK": 50.66666666666667,
+      "mrr": 0.9333333333333333,
+      "keywordCoverage": 85.18518518518519,
+      "avgLatencyMs": 106.93333333333334,
+      "p95LatencyMs": 218.0,
+      "p99LatencyMs": 218.0
+    },
+    {
+      "runNumber": 3,
+      "recallAtK": 93.33333333333333,
+      "precisionAtK": 52.0,
+      "mrr": 0.9333333333333333,
+      "keywordCoverage": 85.18518518518519,
+      "avgLatencyMs": 105.33333333333333,
+      "p95LatencyMs": 166.0,
+      "p99LatencyMs": 166.0
+    }
+  ],
+  "representativeScenarioSummary": [
+    {
+      "category": "character_profile",
+      "queryCount": 3,
+      "recallAtK": 66.66666666666666,
+      "precisionAtK": 60.0,
+      "mrr": 0.6666666666666666,
+      "keywordCoverage": 75.0
+    },
+    {
+      "category": "item_skill",
+      "queryCount": 3,
+      "recallAtK": 100.0,
+      "precisionAtK": 80.0,
+      "mrr": 1.0,
+      "keywordCoverage": 100.0
+    },
+    {
+      "category": "prewriting_context",
+      "queryCount": 3,
+      "recallAtK": 100.0,
+      "precisionAtK": 73.33333333333333,
+      "mrr": 1.0,
+      "keywordCoverage": 66.66666666666666
+    },
+    {
+      "category": "unresolved_event",
+      "queryCount": 3,
+      "recallAtK": 100.0,
+      "precisionAtK": 20.0,
+      "mrr": 1.0,
+      "keywordCoverage": 83.33333333333334
+    },
+    {
+      "category": "world_setting",
+      "queryCount": 3,
+      "recallAtK": 100.0,
+      "precisionAtK": 20.0,
+      "mrr": 1.0,
+      "keywordCoverage": 100.0
+    }
+  ],
+  "unmatchedCases": [
+    {
+      "category": "character_profile",
+      "query": "少宫主"
+    }
+  ],
+  "vectorsWritten": false,
+  "notes": [
+    "R3 re-baseline on 2026-08-27 after extractKeywords gained Chinese tail-2 substring extraction (萧师兄 fix).",
+    "Three sequential read-only evaluations against novelId=0; Recall@5 = 93.3% in all three runs (14/15).",
+    "萧师兄 recovered (keyword 师兄 now extracted from 萧师兄); 少宫主 remains the only unmatched case (single relevant segment below vector candidate pool).",
+    "No regression in the other 13 cases across the three runs.",
+    "This is a 15-query operational baseline, not a capacity claim."
+  ]
+}

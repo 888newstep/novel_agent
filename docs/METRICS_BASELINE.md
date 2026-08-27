@@ -145,12 +145,13 @@ The evaluation service and report model already support:
 ### Corpus-Aligned Chinese Profile Evidence
 
 - profile: `writing-zh-live-v1`, dataset version `2026-08-10`, `novelId=0`, `TopK=5`
-- current baseline (R2-ZH-LIVE-20260827): Recall@5 warmed stable-state `86.7%`; three-run mean `88.9%`; Precision@5 `45.3%`; MRR `0.806`; keyword coverage `81.5%`; warmed latency `82.5ms` / `P95=131ms`
-- historical baseline (R1-ZH-LIVE-20260810): Recall@5 `73.3%` in all three runs; Precision@5 `38.7%–40.0%` (mean `39.6%`); MRR `0.667–0.700` (mean `0.689`); keyword coverage `63.0%`; average latency `60.7–210.3ms`
-- latency: first run is cold-started and later runs are warmed; R2 warmed `82.5ms` / `P95=131ms` (cold first run had a 48s P95 spike)
-- scenario signal (R2): `unresolved_event` recovered to `100%` Recall@5 (was `33.3%`); `character_profile` is now the weakest bucket at `66.7%`
-- hard cases (R2 stable): `少宫主` and `萧师兄` (character_profile); historical R1 hard cases `天极门 被灭宗`, `火祖洞天 七狱塔`, and `黑皇城 少宫主` are now resolved
-- evidence: `docs/benchmarks/rag-evaluation-zh-live-20260810.json`, `docs/benchmarks/rag-evaluation-zh-live-20260827.json`
+- current baseline (R3-ZH-LIVE-20260827): Recall@5 `93.3%` in all three runs (14/15); Precision@5 mean `51.1%`; MRR mean `0.933`; keyword coverage `85.2%`; warmed latency `106.1ms` / `P95=192ms`
+- historical baseline (R2-ZH-LIVE-20260827): Recall@5 warmed `86.7%` / three-run mean `88.9%`; Precision@5 `45.3%`; MRR `0.806`; keyword coverage `81.5%`
+- historical baseline (R1-ZH-LIVE-20260810): Recall@5 `73.3%`; Precision@5 `38.7%–40.0%` (mean `39.6%`); MRR `0.667–0.700` (mean `0.689`); keyword coverage `63.0%`; average latency `60.7–210.3ms`
+- latency: first run is cold-started and later runs are warmed; R3 warmed `106.1ms` / `P95=192ms`
+- scenario signal (R3): `unresolved_event` at `100%`; `character_profile` partially recovered to `66.7%` (`萧师兄` fixed via `师兄` sub-keyword); `少宫主` remains the only unmatched case
+- hard cases (R3): `少宫主` only; historical `萧师兄` (R2) and `天极门 被灭宗`/`火祖洞天 七狱塔`/`黑皇城 少宫主` (R1) are now resolved
+- evidence: `docs/benchmarks/rag-evaluation-zh-live-20260810.json`, `docs/benchmarks/rag-evaluation-zh-live-20260827.json`, `docs/benchmarks/rag-evaluation-zh-live-r3-20260827.json`
 ### Evidence Files
 
 - `docs/BENCHMARK_REPORT.md`

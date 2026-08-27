@@ -43,6 +43,7 @@ Record the following in every round:
 | R1-ZH-PROFILE | 2026-08-10 | 15 | Chinese corpus-aligned profile and API contract | 5 | n/a | n/a | n/a | n/a | n/a | n/a | emitted | n/a | `writing-zh-live-v1` profile loaded and isolated in CI; live semantic evidence is recorded in `R1-ZH-LIVE-20260810` |
 | R1-ZH-LIVE-20260810 | 2026-08-10 | 15 | Chinese corpus-aligned live retrieval | 5 | 73.3% | 39.6% | 0.689 | 111.6ms | 240ms | 240ms | 563 | n/a | Mean of 3 sequential read-only runs; first run cold-started; no vectors written |
 | R2-ZH-LIVE-20260827 | 2026-08-27 | 15 | Chinese corpus re-baseline after retrieval streamline | 5 | 88.9% | 45.3% | 0.806 | 82.5ms* | 131ms* | 131ms* | 563 | n/a | Mean of 3 sequential read-only runs; warmed runs 2-3 stable at 86.7%; *latency = warmed runs only (cold first run had a 48s P95 spike); no vectors written |
+| R3-ZH-LIVE-20260827 | 2026-08-27 | 15 | Chinese corpus re-baseline after Chinese tail-substring keyword extraction | 5 | 93.3% | 51.1% | 0.933 | 106ms* | 192ms* | 192ms* | 562 | n/a | Recall@5 93.3% in all 3 runs (14/15); 萧师兄 recovered via 师兄 sub-keyword; 少宫主 only unmatched; *latency = warmed runs only; no vectors written |
 | R1-HISTORY-SMOKE-20260810 | 2026-08-10 | 15 | aggregate persistence and restart smoke | 5 | 80.0% | 41.3% | 0.756 | 307.7ms | 887ms | 887ms | not recorded | n/a | One read-only run; one MySQL snapshot row; report/history restored after restart; details absent |
 | IMPORT-LIVE-20260810-LARGE | 2026-08-10 | 600 | isolated JSONL import | n/a | n/a | n/a | n/a | 38.0s | n/a | n/a | n/a | n/a | 1200 segments, 15.85 records/s, 31.7 segments/s, 0 retries, cleanup succeeded |
 | IMPORT-LIVE-20260811-PINNED-REPRESENTATIVE | 2026-08-11 | 1000 | pinned-host schema-aligned Chinese import | n/a | n/a | n/a | n/a | 55.2s | n/a | n/a | n/a | n/a | 2000 segments, 18.11 records/s, 36.21 segments/s, 0 retries, cleanup succeeded |
@@ -83,6 +84,16 @@ Record the following in every round:
 - next tuning samples: `少宫主` and `萧师兄` (character_profile) were not matched in the warmed Top-5 results; root causes: `少宫主` has a single relevant segment that stays below the vector candidate pool, and `萧师兄` lacks Chinese tokenization in keyword extraction
 - safety: the run only searched `novelId=0`; no vectors were written
 - live-run evidence: `docs/benchmarks/rag-evaluation-zh-live-20260827.json`
+
+### R3-ZH-LIVE-20260827
+
+- live status: re-verified on 2026-08-27 after `extractKeywords` gained Chinese tail-2-substring extraction (`萧师兄` fix); three sequential read-only evaluations completed against `novelId=0`
+- aggregate result: Recall@5 `93.3%` in all three runs (14/15); Precision@5 mean `51.1%`; MRR mean `0.933`; keyword coverage `85.2%`
+- latency result: warmed runs average `106.1ms`, warmed `P95=192ms`, warmed `P99=192ms`
+- scenario signal: `character_profile` partially recovered to `66.7%`; `萧师兄` now matched at Top-1 via the extracted `师兄` sub-keyword; `少宫主` remains the only unmatched case
+- root cause: Chinese role/title core words sit at the token tail (`师兄`/`宫主`/`长老`…); tail-2-substring extraction lets `萧师兄` hit corpus fragments that only contain `师兄`
+- safety: the run only searched `novelId=0`; no vectors were written
+- live-run evidence: `docs/benchmarks/rag-evaluation-zh-live-r3-20260827.json`
 
 ## RAG Evaluation History Persistence Smoke
 
