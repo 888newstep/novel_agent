@@ -1,0 +1,143 @@
+{
+  "runId": "R2-ZH-LIVE-20260827",
+  "status": "verified",
+  "runDate": "2026-08-27",
+  "profileName": "writing-zh-live-v1",
+  "datasetVersion": "2026-08-10",
+  "novelId": 0,
+  "topK": 5,
+  "queryCount": 15,
+  "repetitions": 3,
+  "environment": {
+    "mysql": "configured_and_connected",
+    "milvus": "configured_and_reachable",
+    "embeddingProvider": "configured_and_used"
+  },
+  "aggregate": {
+    "recallAtK": {
+      "mean": 88.8888888888889,
+      "min": 86.66666666666667,
+      "max": 93.33333333333333
+    },
+    "precisionAtK": {
+      "mean": 45.333333333333336,
+      "min": 45.33333333333333,
+      "max": 45.33333333333333
+    },
+    "mrr": {
+      "mean": 0.8055555555555557,
+      "min": 0.8,
+      "max": 0.8166666666666667
+    },
+    "keywordCoverage": 81.48148148148148,
+    "avgLatencyMs": {
+      "mean": 1367.9111111111113,
+      "min": 64.2,
+      "max": 3938.8
+    },
+    "p95LatencyMs": {
+      "mean": 16090.333333333334,
+      "min": 104.0,
+      "max": 48009.0
+    },
+    "p99LatencyMs": {
+      "mean": 16090.333333333334,
+      "min": 104.0,
+      "max": 48009.0
+    },
+    "avgRetrievedContextChars": 2250.0,
+    "avgRetrievedContextTokens": 563.0
+  },
+  "runs": [
+    {
+      "runNumber": 1,
+      "recallAtK": 93.33333333333333,
+      "precisionAtK": 45.33333333333333,
+      "mrr": 0.8166666666666667,
+      "keywordCoverage": 81.48148148148148,
+      "avgLatencyMs": 3938.8,
+      "p95LatencyMs": 48009.0,
+      "p99LatencyMs": 48009.0
+    },
+    {
+      "runNumber": 2,
+      "recallAtK": 86.66666666666667,
+      "precisionAtK": 45.33333333333333,
+      "mrr": 0.8,
+      "keywordCoverage": 81.48148148148148,
+      "avgLatencyMs": 64.2,
+      "p95LatencyMs": 104.0,
+      "p99LatencyMs": 104.0
+    },
+    {
+      "runNumber": 3,
+      "recallAtK": 86.66666666666667,
+      "precisionAtK": 45.33333333333333,
+      "mrr": 0.8,
+      "keywordCoverage": 81.48148148148148,
+      "avgLatencyMs": 100.73333333333333,
+      "p95LatencyMs": 158.0,
+      "p99LatencyMs": 158.0
+    }
+  ],
+  "representativeScenarioSummary": [
+    {
+      "category": "character_profile",
+      "queryCount": 3,
+      "recallAtK": 33.33333333333333,
+      "precisionAtK": 33.33333333333333,
+      "mrr": 0.3333333333333333,
+      "keywordCoverage": 50.0
+    },
+    {
+      "category": "item_skill",
+      "queryCount": 3,
+      "recallAtK": 100.0,
+      "precisionAtK": 73.33333333333333,
+      "mrr": 0.8333333333333334,
+      "keywordCoverage": 100.0
+    },
+    {
+      "category": "prewriting_context",
+      "queryCount": 3,
+      "recallAtK": 100.0,
+      "precisionAtK": 80.0,
+      "mrr": 1.0,
+      "keywordCoverage": 66.66666666666666
+    },
+    {
+      "category": "unresolved_event",
+      "queryCount": 3,
+      "recallAtK": 100.0,
+      "precisionAtK": 20.0,
+      "mrr": 0.8333333333333334,
+      "keywordCoverage": 83.33333333333334
+    },
+    {
+      "category": "world_setting",
+      "queryCount": 3,
+      "recallAtK": 100.0,
+      "precisionAtK": 20.0,
+      "mrr": 1.0,
+      "keywordCoverage": 100.0
+    }
+  ],
+  "unmatchedCases": [
+    {
+      "category": "character_profile",
+      "query": "少宫主"
+    },
+    {
+      "category": "character_profile",
+      "query": "萧师兄"
+    }
+  ],
+  "vectorsWritten": false,
+  "notes": [
+    "Three sequential read-only evaluations ran against novelId=0 on 2026-08-27 (re-baseline).",
+    "Run 1 is cold-started (embedding cache/Milvus warm-up) with 48s P95 spike; runs 2-3 represent the warmed process.",
+    "Compared with R1-ZH-LIVE-20260810, unresolved_event recovered from 33.3% to 100%; character_profile is now the weakest bucket (少宫主, 萧师兄).",
+    "Recall@5 warmed stable-state is 86.7% (runs 2-3); three-run mean is 88.9%. This is a 15-query operational baseline, not a capacity claim.",
+    "No vectors were written during evaluation."
+  ]
+}

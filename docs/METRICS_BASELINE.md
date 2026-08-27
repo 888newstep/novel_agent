@@ -145,12 +145,12 @@ The evaluation service and report model already support:
 ### Corpus-Aligned Chinese Profile Evidence
 
 - profile: `writing-zh-live-v1`, dataset version `2026-08-10`, `novelId=0`, `TopK=5`
-- sample: 15 queries repeated three times against reachable cloud Milvus; no vectors were written
-- quality: Recall@5 `73.3%` in all three runs; Precision@5 `38.7%–40.0%` (mean `39.6%`); MRR `0.667–0.700` (mean `0.689`); keyword coverage `63.0%`
-- latency: average `60.7–210.3ms`; P95 `73–567ms`; P99 `73–567ms`; first run is cold-started and later runs are warmed
-- scenario signal: `item_skill` and `world_setting` are strongest in the representative run; `unresolved_event` is the next ranking-tuning target
-- hard cases: `少宫主`, `天极门 被灭宗`, `火祖洞天 七狱塔`, and `黑皇城 少宫主`
-- evidence: `docs/benchmarks/rag-evaluation-zh-live-20260810.json`
+- current baseline (R2-ZH-LIVE-20260827): Recall@5 warmed stable-state `86.7%`; three-run mean `88.9%`; Precision@5 `45.3%`; MRR `0.806`; keyword coverage `81.5%`; warmed latency `82.5ms` / `P95=131ms`
+- historical baseline (R1-ZH-LIVE-20260810): Recall@5 `73.3%` in all three runs; Precision@5 `38.7%–40.0%` (mean `39.6%`); MRR `0.667–0.700` (mean `0.689`); keyword coverage `63.0%`; average latency `60.7–210.3ms`
+- latency: first run is cold-started and later runs are warmed; R2 warmed `82.5ms` / `P95=131ms` (cold first run had a 48s P95 spike)
+- scenario signal (R2): `unresolved_event` recovered to `100%` Recall@5 (was `33.3%`); `character_profile` is now the weakest bucket at `66.7%`
+- hard cases (R2 stable): `少宫主` and `萧师兄` (character_profile); historical R1 hard cases `天极门 被灭宗`, `火祖洞天 七狱塔`, and `黑皇城 少宫主` are now resolved
+- evidence: `docs/benchmarks/rag-evaluation-zh-live-20260810.json`, `docs/benchmarks/rag-evaluation-zh-live-20260827.json`
 ### Evidence Files
 
 - `docs/BENCHMARK_REPORT.md`

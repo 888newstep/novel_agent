@@ -220,3 +220,14 @@ It should capture problem, change, result, and tradeoff instead of raw commit hi
 - result: 1,000 records produced 2,000 segments in `55.227s` service time at `18.11 records/s` and `36.21 segments/s`, with `0` retries, `0` failures, `4` flushes, and successful cleanup
 - tradeoff: the corpus is schema-aligned synthetic data and the host is a developer workstation; the result is a bounded operational baseline, not a 50K production capacity claim
 - evidence: `scripts/generate-representative-import-dataset.ps1`, `scripts/run-import-benchmark.ps1`, `docs/benchmarks/import-benchmark-representative-live-20260811.json`, and `docs/BENCHMARK_REPORT.md`
+
+### 2026-08-27 (Chinese RAG re-baseline after retrieval streamline)
+
+- topic: current retrieval baseline vs the 2026-08-10 recorded 73.3%
+- problem: the committed report still showed Recall@5 `73.3%`, but the retrieval streamline commits (`7937926`, `74ec537`) had changed ranking behavior and the persisted baseline was stale
+- change: re-ran the same `writing-zh-live-v1` evaluation three times (`novelId=0`, `TopK=5`, 15 queries) and committed a new snapshot `rag-evaluation-zh-live-20260827.json`
+- result: warmed stable-state Recall@5 `86.7%` (runs 2-3 identical); three-run mean `88.9%`; Precision@5 `45.3%`; MRR `0.806`; keyword coverage `81.5%`; warmed latency `82.5ms` / `P95=131ms` (cold first run had a 48s P95 warm-up spike)
+- scenario signal: `unresolved_event` recovered from `33.3%` to `100%`; `character_profile` is now the weakest bucket at `66.7%` (`少宫主`, `萧师兄`)
+- root causes: `少宫主` has a single relevant segment that stays below the vector candidate pool; `萧师兄` lacks Chinese tokenization in keyword extraction so the exact keyword never matches corpus text
+- tradeoff: this is a 15-query operational baseline, not a capacity claim; the character_profile bucket is the next tuning target if the number needs to rise above 86.7%
+- evidence: `docs/benchmarks/rag-evaluation-zh-live-20260827.json`, `docs/BENCHMARK_REPORT.md`, `docs/METRICS_BASELINE.md`
