@@ -22,7 +22,7 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <langchain4j.version>0.34.0</langchain4j.version>
+        <langchain4j.version>1.22.0</langchain4j.version>
         <milvus-sdk.version>2.6.23</milvus-sdk.version>
         <mysql-connector.version>8.2.0</mysql-connector.version>
         <jackson-bom.version>2.21.5</jackson-bom.version>
