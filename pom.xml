@@ -29,7 +29,7 @@
         <netty.version>4.1.136.Final</netty.version>
         <opennlp.version>2.5.9</opennlp.version>
         <commons-lang3.version>3.18.0</commons-lang3.version>
-        <jsoup.version>1.23.1</jsoup.version>
+        <jsoup.version>1.23.2</jsoup.version>
     </properties>
 
     <dependencyManagement>
