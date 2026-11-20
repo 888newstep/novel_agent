@@ -49,17 +49,119 @@ R8 模板：悬念问句收尾（？结尾且含「竟/难道/究竟」）、「
 
 **词典**：`src/main/resources/ai_trace_phrases_zh.txt`，UTF-8，`# group:` 分组（banned / cliche / transition），词条一行一个。加载失败时相关规则降级 UNKNOWN 并记 warn 日志，不影响应用启动。阈值等全部外置于 `application.yml` 的 `ai-trace.*`。
 
-## 四、可用性证据
+## 四、可用性证据（真实请求，2026-11-20）
 
-**P0 阶段（2026-11-20）**：完整应用启动依赖 Milvus 云端连接，而云服务器 49.234.187.76 于本次收尾时整台不可达（ping / SSH / 19530 全部失败），实时 curl 证据暂缺，**服务器恢复后补跑**：
+部署环境：腾讯云服务器 `vm-0-15-ubuntu`（Tailscale 内网 100.80.77.105，公网 49.234.187.76 当时入方向被平台侧封禁，证据经 Tailscale SSH 在服务器本机采集）。部署 jar：novel-agent-1.0.0（含 P0 全部改动，master `b5e4876`）。
 
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/novel/ai-trace/check \
-  -H "Content-Type: application/json" \
-  -d '{"text":"..."}'
+  -H "Content-Type: application/json" -d '{"text":"<AI 风格中文样例，约 160 汉字>"}'
 ```
 
-**现有证据**：`AiTraceControllerTest`（MockMvc standaloneSetup，真实检测服务 + 真实词典，仅 HTTP 容器层为测试壳）验证：text 模式 200 且返回全部契约字段（overallScore / riskLevel / lowConfidence / dimensionScores / findings / flaggedSentences / rulesVersion=aitrace-v1-p0 / disclaimer / charCount / hanCharCount / sentenceCount）；章节模式 200；章节不存在 404；双模式 / 空请求 / 残缺章节模式 400。全量 78 个测试 0 失败 0 错误。
+实测响应（完整原始报文存 `artifacts/aitrace-evidence.json`，此处为关键字段）：
+
+```json
+{
+  "overallScore": 78,
+  "riskLevel": "high",
+  "lowConfidence": true,
+  "dimensionScores": {
+    "lexical": 100.0,
+    "structural": 100.0,
+    "syntactic": 25.0
+  },
+  "rulesVersion": "aitrace-v1-p0",
+  "charCount": 138,
+  "hanCharCount": 120,
+  "sentenceCount": 12,
+  "findings": [
+    {
+      "ruleId": "R8",
+      "dimension": "STRUCTURAL",
+      "hitCount": 3,
+      "density": null,
+      "rawScore": 100,
+      "severity": "HIGH",
+      "message": "章末命中 3 个钩子模板（阈值 2）"
+    },
+    {
+      "ruleId": "R1",
+      "dimension": "LEXICAL",
+      "hitCount": 5,
+      "density": 41.666666666666664,
+      "rawScore": 100,
+      "severity": "HIGH",
+      "message": "套话密度 41.67 次/千字，阈值 3.00"
+    },
+    {
+      "ruleId": "R3",
+      "dimension": "SYNTACTIC",
+      "hitCount": 1,
+      "density": null,
+      "rawScore": 50,
+      "severity": "HIGH",
+      "message": "句长标准差 3.01（均值 11.5，12 句），阈值 6.00"
+    },
+    {
+      "ruleId": "R5",
+      "dimension": "SYNTACTIC",
+      "hitCount": 0,
+      "density": 0.0,
+      "rawScore": 0,
+      "severity": "NONE",
+      "message": "转折词密度 0.00 次/千字，阈值 2.00"
+    }
+  ],
+  "flaggedSentences": [
+    {
+      "sentenceIndex": -1,
+      "score": 100,
+      "ruleIds": [
+        "R8"
+      ]
+    },
+    {
+      "sentenceIndex": 2,
+      "score": 100,
+      "ruleIds": [
+        "R1"
+      ]
+    },
+    {
+      "sentenceIndex": 3,
+      "score": 100,
+      "ruleIds": [
+        "R1"
+      ]
+    },
+    {
+      "sentenceIndex": 4,
+      "score": 100,
+      "ruleIds": [
+        "R1"
+      ]
+    },
+    {
+      "sentenceIndex": 5,
+      "score": 100,
+      "ruleIds": [
+        "R1"
+      ]
+    },
+    {
+      "sentenceIndex": 6,
+      "score": 100,
+      "ruleIds": [
+        "R1"
+      ]
+    }
+  ]
+}
+```
+
+解读：AI 风格样例判 high（78 分）；R1 套话密度 41.67 次/千字（5 处命中）、R8 章末 3 个钩子模板、R3 句长均齐各打满分，R5 转折词 0 命中；`lowConfidence=true` 因样例不足 200 汉字（诚实口径生效）；非密度规则 density 为 null（无 NaN 非标准值）。
+
+**契约回归**：`AiTraceControllerTest`（MockMvc，真实检测服务 + 真实词典）验证两种入参、404、400 分支；全量 78 个测试 0 失败 0 错误。
 
 ## 五、已知限制与遗留
 
