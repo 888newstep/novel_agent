@@ -5,6 +5,7 @@ import com.novel.agent.entity.*;
 import com.novel.agent.exception.CostLimitExceededException;
 import com.novel.agent.repository.*;
 import com.novel.agent.service.DeepSeekService;
+import com.novel.agent.service.PostGenerationCheckService;
 import com.novel.agent.service.ChatPromptSupport;
 import com.novel.agent.service.MilvusAdminService;
 import com.novel.agent.service.MilvusSearchService;
@@ -41,6 +42,7 @@ public class NovelController {
     private final MilvusAdminService milvusAdminService;
     private final TokenCostService tokenCostService;
     private final RetrievalProperties retrievalProperties;
+    private final PostGenerationCheckService postGenerationCheckService;
 
     // =============================================
     // 小说管理
@@ -1197,91 +1199,9 @@ public class NovelController {
     }
 
     private Map<String, Object> buildPostGenerationCheck(String topic, String generated) {
-        String content = generated == null ? "" : generated.trim();
-        List<String> warnings = new ArrayList<>();
-
-        if (content.isEmpty()) {
-            warnings.add("empty_output");
-        }
-        if (!content.isEmpty() && content.length() < 80) {
-            warnings.add("content_too_short");
-        }
-        if (countOccurrences(content, "...") + countOccurrences(content, "……") >= 4) {
-            warnings.add("excessive_ellipsis");
-        }
-
-        for (String phrase : List.of("suddenly", "all of a sudden", "without warning")) {
-            if (content.toLowerCase(Locale.ROOT).contains(phrase)) {
-                warnings.add("banned_phrase:" + phrase.replace(' ', '_'));
-            }
-        }
-
-        if (hasRepeatedOpening(content)) {
-            warnings.add("repeated_opening_pattern");
-        }
-
-        Map<String, Object> metrics = new LinkedHashMap<>();
-        metrics.put("topic", topic);
-        metrics.put("charCount", content.length());
-        metrics.put("paragraphCount", countParagraphs(content));
-        metrics.put("lineCount", content.isEmpty() ? 0 : content.split("\\R").length);
-        metrics.put("sentenceCount", countSentences(content));
-
-        Map<String, Object> check = new LinkedHashMap<>();
-        check.put("status", warnings.isEmpty() ? "pass" : "warn");
-        check.put("warningCount", warnings.size());
-        check.put("warnings", warnings);
-        check.put("metrics", metrics);
-        return check;
+        return postGenerationCheckService.buildPostGenerationCheck(topic, generated);
     }
 
-    private boolean hasRepeatedOpening(String content) {
-        List<String> normalizedLines = Arrays.stream(content.split("\\R"))
-                .map(String::trim)
-                .filter(line -> !line.isBlank())
-                .map(line -> line.substring(0, Math.min(line.length(), 16)).toLowerCase(Locale.ROOT))
-                .toList();
-        Set<String> seen = new HashSet<>();
-        for (String opening : normalizedLines) {
-            if (!seen.add(opening)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private int countParagraphs(String content) {
-        if (content == null || content.isBlank()) {
-            return 0;
-        }
-        return (int) Arrays.stream(content.split("\\R\\s*\\R"))
-                .map(String::trim)
-                .filter(part -> !part.isBlank())
-                .count();
-    }
-
-    private int countSentences(String content) {
-        if (content == null || content.isBlank()) {
-            return 0;
-        }
-        return (int) Arrays.stream(content.split("[.!?。！？]+"))
-                .map(String::trim)
-                .filter(part -> !part.isBlank())
-                .count();
-    }
-
-    private int countOccurrences(String content, String target) {
-        if (content == null || content.isEmpty() || target == null || target.isEmpty()) {
-            return 0;
-        }
-        int count = 0;
-        int index = 0;
-        while ((index = content.indexOf(target, index)) >= 0) {
-            count++;
-            index += target.length();
-        }
-        return count;
-    }
     private Map<String, Object> buildLayer(int count, List<String> samples) {
         Map<String, Object> layer = new LinkedHashMap<>();
         layer.put("count", count);

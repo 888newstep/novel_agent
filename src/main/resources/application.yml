@@ -180,3 +180,19 @@ retrieval:
     item: 道具 状态 归属
     faction: 势力 灵感 设定
     current-chapter: 当前章节 上下文 续写
+
+# =============================================
+# AI 痕迹自检器（P0：R1/R3/R5/R8 四规则）
+# =============================================
+ai-trace:
+  enabled: true
+  dictionary-path: ai_trace_phrases_zh.txt
+  phrase-density-threshold: 3.0          # R1：套话密度，次/千字
+  transition-density-threshold: 2.0      # R5：转折词密度，次/千字
+  sentence-length-sigma-threshold: 6.0   # R3：句长标准差阈值
+  min-sentences-for-variance: 8          # R3：最低判定句数
+  ending-hook-min-match: 2               # R8：末2段至少命中模板数
+  min-char-count: 200                    # 低于该汉字数标记低置信
+  max-flagged-sentences: 10
+  max-text-chars: 50000
+  rules-version: aitrace-v1-p0

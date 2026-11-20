@@ -52,7 +52,10 @@ class NovelControllerTest {
                 mock(MilvusSearchService.class),
                 mock(MilvusAdminService.class),
                 mock(TokenCostService.class),
-                new RetrievalProperties()
+                new RetrievalProperties(),
+                new com.novel.agent.service.PostGenerationCheckService(
+                        new com.novel.agent.config.AiTraceProperties(),
+                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties()))
         );
 
         MilvusSearchService milvusSearchService = extractSearchService(controller);
@@ -134,7 +137,10 @@ class NovelControllerTest {
                 milvusSearchService,
                 mock(MilvusAdminService.class),
                 tokenCostService,
-                new RetrievalProperties()
+                new RetrievalProperties(),
+                new com.novel.agent.service.PostGenerationCheckService(
+                        new com.novel.agent.config.AiTraceProperties(),
+                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties()))
         );
 
         Novel novel = Novel.builder().id(2L).worldSetting("cultivation dynasty").build();
@@ -368,7 +374,10 @@ class NovelControllerTest {
                 milvusSearchService,
                 mock(MilvusAdminService.class),
                 tokenCostService,
-                new RetrievalProperties()
+                new RetrievalProperties(),
+                new com.novel.agent.service.PostGenerationCheckService(
+                        new com.novel.agent.config.AiTraceProperties(),
+                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties()))
         );
 
         Novel novel = Novel.builder().id(8L).worldSetting("Azure Peak controls the outer mountain").build();
@@ -444,7 +453,10 @@ class NovelControllerTest {
                 milvusSearchService,
                 milvusAdminService,
                 tokenCostService,
-                new RetrievalProperties()
+                new RetrievalProperties(),
+                new com.novel.agent.service.PostGenerationCheckService(
+                        new com.novel.agent.config.AiTraceProperties(),
+                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties()))
         );
 
         Novel novel = Novel.builder().id(3L).title("Budget Trial").worldSetting("sects and ruins").build();
