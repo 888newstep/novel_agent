@@ -110,7 +110,7 @@ public final class AiTraceTextUtils {
 
     private static boolean isSentenceEnd(int codePoint) {
         return switch (codePoint) {
-            case '。', '！', '？', '!', '?', '…' -> true;
+            case '。', '！', '？', '.', '!', '?', '…' -> true;
             default -> false;
         };
     }

@@ -24,7 +24,8 @@ public class AiTraceCheckRequest {
     public boolean isExactlyOneMode() {
         boolean hasText = text != null && !text.isBlank();
         boolean hasChapter = novelId != null && chapterId != null;
-        // 只允许其中一种模式：纯 text，或完整的 novelId + chapterId
-        return hasText != hasChapter;
+        boolean partialChapter = (novelId != null) != (chapterId != null);
+        // 只允许其中一种模式：纯 text，或完整的 novelId + chapterId；残缺的章节模式拒绝
+        return hasText != hasChapter && !partialChapter;
     }
 }

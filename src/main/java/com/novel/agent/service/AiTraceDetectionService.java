@@ -57,9 +57,10 @@ public class AiTraceDetectionService {
                 .toList();
 
         Map<String, Double> dimensionScores = aggregateDimensions(findings);
-        boolean allRulesUnknown = findings.stream().allMatch(f -> f.severity() == AiTraceFinding.Severity.UNKNOWN);
-        if (allRulesUnknown) {
-            log.warn("AI trace check: all rules degraded to UNKNOWN");
+        // 诚实约束：任一规则无法判定（词典降级、样本过短）都视为检测覆盖不完整，
+        // 标记低置信，避免用不完整的结果给出看似确定的结论。
+        if (findings.stream().anyMatch(f -> f.severity() == AiTraceFinding.Severity.UNKNOWN)) {
+            log.warn("AI trace check: some rules degraded to UNKNOWN, marking low confidence");
             lowConfidence = true;
         }
 
