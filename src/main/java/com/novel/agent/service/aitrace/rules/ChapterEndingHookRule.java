@@ -80,7 +80,7 @@ public class ChapterEndingHookRule implements AiTraceRule {
         String message = hits >= minMatch
                 ? String.format("章末命中 %d 个钩子模板（阈值 %d）", hits, minMatch)
                 : String.format("章末命中 %d 个钩子模板，低于计分阈值 %d，仅记录不计分", hits, minMatch);
-        return new AiTraceFinding(id(), dimension(), hits, Double.NaN, rawScore,
+        return new AiTraceFinding(id(), dimension(), hits, null, rawScore,
                 AiTraceFinding.severityOf(rawScore), evidence, message);
     }
 

@@ -61,7 +61,7 @@ public class SentenceLengthVarianceRule implements AiTraceRule {
                 : 0;
         String message = String.format("句长标准差 %.2f（均值 %.1f，%d 句），阈值 %.2f",
                 sigma, mean, sentences.size(), threshold);
-        return new AiTraceFinding(id(), dimension(), sigma < threshold ? 1 : 0, Double.NaN, rawScore,
+        return new AiTraceFinding(id(), dimension(), sigma < threshold ? 1 : 0, null, rawScore,
                 AiTraceFinding.severityOf(rawScore), List.of(), message);
     }
 }
