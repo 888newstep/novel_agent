@@ -232,7 +232,7 @@ public class RagEvaluationService {
                 queriesWithRelevantResult++;
                 mrrSum += 1.0 / firstRelevantRank;
             }
-            totalRelevant += relevantCount;
+            totalRelevant = (int) (totalRelevant + relevantCount);
             totalRetrieved += results.size();
 
             detailResults.add(new QueryResult(
