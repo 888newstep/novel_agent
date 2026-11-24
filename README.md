@@ -3,8 +3,14 @@
 > A vertical AI writing system for long-form web novels: structured story knowledge, chapter-aware retrieval, controlled generation, measurable evaluation, and cost-aware degradation.
 
 [![CI](https://github.com/888newstep/novel_agent/actions/workflows/ci.yml/badge.svg)](https://github.com/888newstep/novel_agent/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-78%20passing-brightgreen.svg)](docs/TEST_MATRIX.md)
+[![Recall@5](https://img.shields.io/badge/Recall%405-93.3%25-brightgreen.svg)](docs/BENCHMARK_REPORT.md)
+[![MRR](https://img.shields.io/badge/MRR-0.933-brightgreen.svg)](docs/BENCHMARK_REPORT.md)
 [![JDK 17](https://img.shields.io/badge/JDK-17-blue.svg)](https://adoptium.net/)
 [![Spring Boot 3.5](https://img.shields.io/badge/Spring%20Boot-3.5-green.svg)](https://spring.io/projects/spring-boot)
+[![LangChain4j 0.34](https://img.shields.io/badge/LangChain4j-0.34-8A2BE2.svg)](https://docs.langchain4j.dev/)
+[![Milvus 2.6](https://img.shields.io/badge/vector%20store-Milvus%202.6-00A1C2.svg)](https://milvus.io/)
+[![Last Commit](https://img.shields.io/github/last-commit/888newstep/novel_agent/master?label=last%20commit)](https://github.com/888newstep/novel_agent/commits/master)
 [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](LICENSE)
 
 ## Why This Project
