@@ -88,12 +88,12 @@ ai:
     enabled: true
     strict-mode: false
     recent-records: 200
-    max-estimated-tokens-per-request: 12000
-    reserved-completion-tokens: ${NOVEL_AGENT_RESERVED_COMPLETION_TOKENS:1200}
-    daily-token-budget: 300000
-    monthly-token-budget: 5000000
-    daily-budget-usd: 5.0
-    monthly-budget-usd: 100.0
+    max-estimated-tokens-per-request: 16000
+    reserved-completion-tokens: ${NOVEL_AGENT_RESERVED_COMPLETION_TOKENS:2500}
+    daily-token-budget: 600000
+    monthly-token-budget: 8000000
+    daily-budget-usd: 10.0
+    monthly-budget-usd: 200.0
     per-novel-daily-token-budget: 0
     per-novel-daily-budget-usd: 0.0
     per-model-daily-token-budget: 0
@@ -118,7 +118,7 @@ ollama:
 # Milvus（云服务器）
 # =============================================
 milvus:
-  host: ${MILVUS_HOST:49.234.187.76}
+  host: ${MILVUS_HOST:100.80.77.105}
   port: ${MILVUS_PORT:19530}
   collection:
     segments: novel_segments
@@ -148,31 +148,32 @@ knowledge:
 
 retrieval:
   search:
-    ef-search: 64
-    default-fetch-multiplier: 2
+    ef-search: 512
+    default-fetch-multiplier: 10
     max-query-variants: 3
     max-query-chars: ${NOVEL_AGENT_RETRIEVAL_MAX_QUERY_CHARS:240}
     max-total-query-chars: ${NOVEL_AGENT_RETRIEVAL_MAX_TOTAL_QUERY_CHARS:480}
     per-chapter-segment-limit: 1
     per-chapter-event-limit: 1
   memory:
-    prompt-token-budget: ${NOVEL_AGENT_PROMPT_TOKEN_BUDGET:1600}
-    recent-chapter-limit: 3
-    segment-limit: 3
-    hook-limit: 2
-    character-limit: 3
-    item-limit: 1
-    faction-limit: 1
-    relation-limit: 2
+    prompt-token-budget: ${NOVEL_AGENT_PROMPT_TOKEN_BUDGET:6000}
+    recent-chapter-limit: 5
+    segment-limit: 5
+    hook-limit: 4
+    character-limit: 5
+    item-limit: 2
+    faction-limit: 2
+    relation-limit: 3
   ranking:
-    keyword-hit-weight: 0.10
-    variant-hit-weight: 0.06
-    primary-field-keyword-hit-weight: 0.14
-    primary-field-exact-match-bonus: 0.20
-    unresolved-event-bonus: 0.18
-    plot-hook-bonus: 0.10
-    exact-match-bonus: 0.16
-    recency-max-boost: 0.12
+    keyword-hit-weight: 0.12
+    variant-hit-weight: 0.08
+    primary-field-keyword-hit-weight: 0.18
+    primary-field-exact-match-bonus: 0.25
+    unresolved-event-bonus: 0.20
+    plot-hook-bonus: 0.12
+    exact-match-bonus: 0.18
+    recency-max-boost: 0.15
+    chapter-proximity-weight: 0.30
   hints:
     segment: 章节片段 续写 上下文
     event: 事件 伏笔 设定

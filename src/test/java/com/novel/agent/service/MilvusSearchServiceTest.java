@@ -3,6 +3,8 @@ package com.novel.agent.service;
 import com.novel.agent.config.RetrievalProperties;
 import com.novel.agent.entity.Chapter;
 import com.novel.agent.entity.KeyEvent;
+import com.novel.agent.entity.NovelCharacter;
+import com.novel.agent.repository.CharacterRepository;
 import com.novel.agent.repository.ChapterRepository;
 import com.novel.agent.repository.KeyEventRepository;
 import com.novel.agent.repository.RelationRepository;
@@ -43,6 +45,7 @@ class MilvusSearchServiceTest {
                 chapterRepository,
                 keyEventRepository,
                 relationRepository,
+                mock(CharacterRepository.class),
                 retrievalProperties
         );
 
@@ -116,6 +119,7 @@ class MilvusSearchServiceTest {
                 chapterRepository,
                 keyEventRepository,
                 relationRepository,
+                mock(CharacterRepository.class),
                 retrievalProperties
         );
 
@@ -187,6 +191,7 @@ class MilvusSearchServiceTest {
                 chapterRepository,
                 keyEventRepository,
                 relationRepository,
+                mock(CharacterRepository.class),
                 retrievalProperties
         );
 
@@ -217,6 +222,7 @@ class MilvusSearchServiceTest {
                 mock(ChapterRepository.class),
                 mock(KeyEventRepository.class),
                 mock(RelationRepository.class),
+                mock(CharacterRepository.class),
                 retrievalProperties
         );
         String longQuery = "abcdefghijklmnopqrstuvwxyz0123456789repeatedcontinuationdetails";
@@ -259,6 +265,7 @@ class MilvusSearchServiceTest {
                 mock(ChapterRepository.class),
                 mock(KeyEventRepository.class),
                 mock(RelationRepository.class),
+                mock(CharacterRepository.class),
                 retrievalProperties
         );
         String longQuery = "abcdefghijklmnopqrstuvwxyz0123456789extra";
@@ -295,6 +302,7 @@ class MilvusSearchServiceTest {
                 chapterRepository,
                 keyEventRepository,
                 relationRepository,
+                mock(CharacterRepository.class),
                 retrievalProperties
         );
 
@@ -381,6 +389,7 @@ class MilvusSearchServiceTest {
                 chapterRepository,
                 keyEventRepository,
                 relationRepository,
+                mock(CharacterRepository.class),
                 new RetrievalProperties()
         );
 
@@ -412,6 +421,7 @@ class MilvusSearchServiceTest {
                 chapterRepository,
                 keyEventRepository,
                 relationRepository,
+                mock(CharacterRepository.class),
                 retrievalProperties
         );
 

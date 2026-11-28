@@ -23,7 +23,7 @@ import org.springframework.stereotype.Component;
 @Configuration
 public class MilvusConfig {
 
-    @Value("${milvus.host:49.234.187.76}")
+    @Value("${milvus.host:100.80.77.105}")
     private String host;
 
     @Value("${milvus.port:19530}")
@@ -32,7 +32,10 @@ public class MilvusConfig {
     @Bean
     public MilvusClientV2 milvusClient() {
         ConnectConfig config = ConnectConfig.builder()
-                .uri("http://" + host + ":" + port)
+                .uri(host + ":" + port)
+                .connectTimeoutMs(30000)
+                .keepAliveTimeoutMs(60000)
+                .secure(false)
                 .build();
         MilvusClientV2 client = new MilvusClientV2(config);
         log.info("Milvus 连接成功: {}:{}", host, port);

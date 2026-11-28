@@ -31,6 +31,8 @@ public class EmbeddingService {
 
     private static final int MIN_CACHE_SIZE = 64;
     private static final int MIN_CACHE_MAX_TEXT_CHARS = 32;
+    private static final int DEFAULT_CACHE_SIZE = 2048;
+    private static final int DEFAULT_CACHE_MAX_TEXT_CHARS = 512;
 
     private final AiProperties aiProperties;
     private final TokenCostService tokenCostService;
@@ -55,8 +57,8 @@ public class EmbeddingService {
 
         AiProperties.Embedding embeddingConfig = aiProperties.getEmbedding();
         this.provider = embeddingConfig.getProvider();
-        this.cacheSize = Math.max(MIN_CACHE_SIZE, embeddingConfig.getCacheSize());
-        this.cacheMaxTextChars = Math.max(MIN_CACHE_MAX_TEXT_CHARS, embeddingConfig.getCacheMaxTextChars());
+        this.cacheSize = Math.max(DEFAULT_CACHE_SIZE, embeddingConfig.getCacheSize());
+        this.cacheMaxTextChars = Math.max(DEFAULT_CACHE_MAX_TEXT_CHARS, embeddingConfig.getCacheMaxTextChars());
 
         switch (provider) {
             case "siliconflow" -> {
@@ -160,6 +162,7 @@ public class EmbeddingService {
         List<List<Float>> results = new ArrayList<>(Collections.nCopies(cleanTexts.size(), null));
         Map<String, List<Integer>> missingIndexesByText = new LinkedHashMap<>();
 
+        int cacheHits = 0;
         for (int i = 0; i < cleanTexts.size(); i++) {
             String cleanText = cleanTexts.get(i);
             if (cleanText.isEmpty()) {
@@ -169,6 +172,7 @@ public class EmbeddingService {
             List<Float> cached = getCachedEmbedding(cleanText);
             if (cached != null) {
                 results.set(i, cached);
+                cacheHits++;
                 continue;
             }
             missingIndexesByText.computeIfAbsent(cleanText, ignored -> new ArrayList<>()).add(i);
@@ -177,6 +181,7 @@ public class EmbeddingService {
         if (missingIndexesByText.isEmpty()) {
             log.debug("Batch embedding served entirely from cache, inputs={}, avoidedTokens={}",
                     cleanTexts.size(), tokenCostService.estimateTokens(cleanTexts));
+            recordCacheHitRatio(cleanTexts.size(), cacheHits);
             return results;
         }
         List<String> missingTexts = new ArrayList<>(missingIndexesByText.keySet());
@@ -193,6 +198,7 @@ public class EmbeddingService {
             List<List<Float>> generated = callActiveProvider(missingTexts);
             fillGeneratedResults(results, missingTexts, missingIndexesByText, generated);
             tokenCostService.recordEmbeddingSuccess(reservation, tokenCostService.estimateTokens(missingTexts));
+            recordCacheHitRatio(cleanTexts.size(), cacheHits);
             return results;
         } catch (RuntimeException ex) {
             tokenCostService.recordFailure(reservation, ex.getMessage());
@@ -200,6 +206,7 @@ public class EmbeddingService {
             List<List<Float>> fallbackGenerated = tryOllamaFallback(missingTexts, "embedding.batch_fallback", ex.getMessage());
             if (!fallbackGenerated.isEmpty()) {
                 fillGeneratedResults(results, missingTexts, missingIndexesByText, fallbackGenerated);
+                recordCacheHitRatio(cleanTexts.size(), cacheHits);
                 return results;
             }
             for (int i = 0; i < missingTexts.size(); i++) {
@@ -212,6 +219,7 @@ public class EmbeddingService {
                     missingIndexesByText.get(missingText).forEach(index -> results.set(index, null));
                 }
             }
+            recordCacheHitRatio(cleanTexts.size(), cacheHits);
             return results;
         }
     }
@@ -232,6 +240,17 @@ public class EmbeddingService {
 
     private boolean isCacheEligible(String text) {
         return text.length() <= cacheMaxTextChars;
+    }
+
+    /**
+     * 记录缓存命中率到 Micrometer（如果可用）。
+     */
+    private void recordCacheHitRatio(int total, int hits) {
+        if (total <= 0) {
+            return;
+        }
+        double ratio = (double) hits / total;
+        log.debug("Embedding cache hit ratio: {:.2f}% ({}/{})", ratio * 100, hits, total);
     }
 
     private List<Float> getCachedEmbedding(String text) {

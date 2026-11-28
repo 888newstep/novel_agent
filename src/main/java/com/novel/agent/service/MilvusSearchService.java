@@ -2,7 +2,9 @@ package com.novel.agent.service;
 
 import com.novel.agent.entity.Chapter;
 import com.novel.agent.entity.KeyEvent;
+import com.novel.agent.entity.NovelCharacter;
 import com.novel.agent.entity.Relation;
+import com.novel.agent.repository.CharacterRepository;
 import com.novel.agent.repository.ChapterRepository;
 import com.novel.agent.repository.KeyEventRepository;
 import com.novel.agent.config.RetrievalProperties;
@@ -41,6 +43,7 @@ public class MilvusSearchService {
     private final ChapterRepository chapterRepository;
     private final KeyEventRepository keyEventRepository;
     private final RelationRepository relationRepository;
+    private final CharacterRepository characterRepository;
     private final RetrievalProperties retrievalProperties;
 
     public List<Map<String, Object>> searchSegments(Long novelId, String queryText, int topK) {
@@ -117,7 +120,8 @@ public class MilvusSearchService {
     }
 
     public List<Map<String, Object>> searchCharacters(Long novelId, String queryText, int topK) {
-        return hybridSearch(
+        // 1. 正常走 Milvus hybridSearch（vector + rerank）
+        List<Map<String, Object>> vectorResults = hybridSearch(
                 "novel_characters",
                 "novel_id == " + novelId,
                 List.of("mysql_char_id", "name", "char_text"),
@@ -131,6 +135,93 @@ public class MilvusSearchService {
                 false,
                 0
         );
+
+        // 2. 从 queryText 中提取可能是角色名字的中文短语
+        List<String> nameKeywords = extractCharacterNameKeywords(queryText);
+        if (nameKeywords.isEmpty()) {
+            return vectorResults;
+        }
+
+        // 3. MySQL 名字子串预匹配——绕过 vector TopN 截断的关键补全
+        LinkedHashMap<Long, Map<String, Object>> merged = new LinkedHashMap<>();
+        for (Map<String, Object> item : vectorResults) {
+            Long charId = asLong(item.get("mysql_char_id"));
+            if (charId != null) {
+                merged.put(charId, item);
+            }
+        }
+
+        for (String keyword : nameKeywords) {
+            List<NovelCharacter> mysqlHits = characterRepository.findByNovelIdAndNameContainingIgnoreCase(novelId, keyword);
+            for (NovelCharacter c : mysqlHits) {
+                merged.computeIfAbsent(c.getId(), id -> buildCharacterMapFromMysql(c, keyword));
+            }
+        }
+
+        // 4. 按 rankScore 重排，截断到 topK
+        return merged.values().stream()
+                .sorted(rankComparator())
+                .limit(topK)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 从续写 query 中提取可能的角色名字关键词。
+     * <p>复用 extractKeywords 的中文切分逻辑，但额外筛掉过短（<2 字）
+     * 和过长（>6 字）的 token，并保留原词优先。</p>
+     */
+    private List<String> extractCharacterNameKeywords(String queryText) {
+        if (queryText == null || queryText.isBlank()) {
+            return List.of();
+        }
+        String[] tokens = queryText.toLowerCase(Locale.ROOT)
+                .split("[\\s\\p{Punct}，。！？；：（）【】、-]+");
+        LinkedHashSet<String> keywords = new LinkedHashSet<>();
+        for (String token : tokens) {
+            String trimmed = token.trim();
+            // 角色名通常是 2-4 字中文（复姓+名 或 姓+称呼），6 字以上基本不会是名字
+            if (trimmed.length() >= 2 && trimmed.length() <= 6 && containsHan(trimmed)) {
+                keywords.add(trimmed);
+                // 3 字以上的角色名补充尾 2 字子串（如 "少宫主" → 补 "宫主"）
+                if (trimmed.length() >= 3) {
+                    String tail = trimmed.substring(trimmed.length() - 2);
+                    keywords.add(tail);
+                    // 同时补充首 2 字子串（如 "少宫主" → 补 "少主"），
+                    // 因为语料中可能只出现 "少主" 而非 "宫主"
+                    String head = trimmed.substring(0, 2);
+                    if (!head.equals(tail)) {
+                        keywords.add(head);
+                    }
+                }
+                // 4 字及以上补充中间 2 字子串，覆盖更多匹配可能
+                if (trimmed.length() >= 4) {
+                    String mid = trimmed.substring(trimmed.length() / 2 - 1, trimmed.length() / 2 + 1);
+                    keywords.add(mid);
+                }
+            }
+        }
+        return List.copyOf(keywords);
+    }
+
+    /**
+     * 把 MySQL 查出的 NovelCharacter 转成和 hybridSearch 返回格式一致的 map。
+     * 给一个高于正常 vector 分数的固定 rankScore（2.0），确保明确命中的角色排在前面。
+     */
+    private Map<String, Object> buildCharacterMapFromMysql(NovelCharacter character, String matchedKeyword) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("mysql_char_id", character.getId());
+        item.put("name", character.getName());
+        String charText = character.getPersonality() != null ? character.getPersonality() : "";
+        if (character.getRealm() != null) charText += " " + character.getRealm();
+        if (character.getTalent() != null) charText += " " + character.getTalent();
+        item.put("char_text", charText.isBlank() ? character.getName() : charText);
+        item.put("score", 0D);                            // vector 原始分——MySQL 补的没有
+        item.put("rankScore", 2.0D);                      // 高固定分，保证排前
+        item.put("keywordHits", 1);
+        item.put("matchReasons", List.of("mysql_name_match=" + matchedKeyword));
+        item.put("rankExplanation", "mysql_name_match=" + matchedKeyword);
+        item.put("explanation", "MySQL 名字预匹配命中 \"" + matchedKeyword + "\"");
+        return item;
     }
 
     public List<Map<String, Object>> searchItems(Long novelId, String queryText, int topK, Integer itemType) {
@@ -233,7 +324,10 @@ public class MilvusSearchService {
                 boundedQuery, retrievalProperties.getHints().getItem(), null));
         variants.addAll(buildQueryVariants(
                 boundedQuery, retrievalProperties.getHints().getFaction(), null));
-        embeddingService.batchGenerateEmbedding(List.copyOf(variants));
+        // 去重后批量生成，减少 API 调用次数
+        List<String> uniqueVariants = List.copyOf(variants);
+        log.debug("Prewarming {} embedding variants for memory assembly", uniqueVariants.size());
+        embeddingService.batchGenerateEmbedding(uniqueVariants);
     }
 
     private Integer resolveCurrentChapterNum(Integer requestedChapterNum, List<Chapter> chapters) {
@@ -270,7 +364,7 @@ public class MilvusSearchService {
         List<String> queryVariants = buildQueryVariants(boundedQuery, expansionHint, currentChapterNum);
         int queryVariantChars = queryVariants.stream().mapToInt(String::length).sum();
         List<List<Float>> queryVectors = embeddingService.batchGenerateEmbedding(queryVariants);
-        int fetchK = Math.max(topK * retrievalProperties.getSearch().getDefaultFetchMultiplier(), topK + 2);
+        int fetchK = Math.max(topK * retrievalProperties.getSearch().getDefaultFetchMultiplier(), topK * 2 + 2);
         Map<String, Map<String, Object>> merged = new LinkedHashMap<>();
 
         for (int i = 0; i < queryVariants.size(); i++) {
@@ -673,9 +767,22 @@ public class MilvusSearchService {
                     if (!keywords.contains(tail)) {
                         keywords.add(tail);
                     }
+                    // 同时补充首 2 字子串（如 "少宫主" → "少主"），
+                    // 因为语料中可能只出现 "少主" 而非 "宫主"
+                    String head = trimmed.substring(0, 2);
+                    if (!head.equals(tail) && !keywords.contains(head)) {
+                        keywords.add(head);
+                    }
+                }
+                // 4 字及以上补充中间 2 字，覆盖如 "火祖洞天" → "祖洞" 这类匹配
+                if (trimmed.length() >= 4 && containsHan(trimmed)) {
+                    String mid = trimmed.substring(trimmed.length() / 2 - 1, trimmed.length() / 2 + 1);
+                    if (!keywords.contains(mid)) {
+                        keywords.add(mid);
+                    }
                 }
             }
-            if (keywords.size() >= 5) {
+            if (keywords.size() >= 8) {
                 break;
             }
         }
@@ -833,14 +940,15 @@ public class MilvusSearchService {
         if (gap < 0) {
             return 0D;
         }
+        double baseWeight = retrievalProperties.getRanking().getChapterProximityWeight();
         return switch (gap) {
-            case 0 -> 0.32D;
-            case 1 -> 0.24D;
-            case 2 -> 0.18D;
-            case 3 -> 0.12D;
-            case 4 -> 0.08D;
-            case 5 -> 0.04D;
-            default -> 0.01D;
+            case 0 -> baseWeight;
+            case 1 -> baseWeight * 0.75D;
+            case 2 -> baseWeight * 0.55D;
+            case 3 -> baseWeight * 0.35D;
+            case 4 -> baseWeight * 0.20D;
+            case 5 -> baseWeight * 0.10D;
+            default -> baseWeight * 0.03D;
         };
     }
 

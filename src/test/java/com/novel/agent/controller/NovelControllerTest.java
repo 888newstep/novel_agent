@@ -55,7 +55,8 @@ class NovelControllerTest {
                 new RetrievalProperties(),
                 new com.novel.agent.service.PostGenerationCheckService(
                         new com.novel.agent.config.AiTraceProperties(),
-                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties()))
+                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties())),
+                mock(com.novel.agent.service.PostGenerationUpdateService.class)
         );
 
         MilvusSearchService milvusSearchService = extractSearchService(controller);
@@ -140,7 +141,8 @@ class NovelControllerTest {
                 new RetrievalProperties(),
                 new com.novel.agent.service.PostGenerationCheckService(
                         new com.novel.agent.config.AiTraceProperties(),
-                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties()))
+                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties())),
+                mock(com.novel.agent.service.PostGenerationUpdateService.class)
         );
 
         Novel novel = Novel.builder().id(2L).worldSetting("cultivation dynasty").build();
@@ -377,7 +379,8 @@ class NovelControllerTest {
                 new RetrievalProperties(),
                 new com.novel.agent.service.PostGenerationCheckService(
                         new com.novel.agent.config.AiTraceProperties(),
-                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties()))
+                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties())),
+                mock(com.novel.agent.service.PostGenerationUpdateService.class)
         );
 
         Novel novel = Novel.builder().id(8L).worldSetting("Azure Peak controls the outer mountain").build();
@@ -456,7 +459,8 @@ class NovelControllerTest {
                 new RetrievalProperties(),
                 new com.novel.agent.service.PostGenerationCheckService(
                         new com.novel.agent.config.AiTraceProperties(),
-                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties()))
+                        new com.novel.agent.service.aitrace.AiTraceDictionary(new com.novel.agent.config.AiTraceProperties())),
+                mock(com.novel.agent.service.PostGenerationUpdateService.class)
         );
 
         Novel novel = Novel.builder().id(3L).title("Budget Trial").worldSetting("sects and ruins").build();

@@ -16,8 +16,8 @@ public class RetrievalProperties {
 
     @Data
     public static class Search {
-        private int efSearch = 64;
-        private int defaultFetchMultiplier = 2;
+        private int efSearch = 128;
+        private int defaultFetchMultiplier = 4;
         private int maxQueryVariants = 3;
         private int maxQueryChars = 240;
         private int maxTotalQueryChars = 480;
@@ -39,14 +39,15 @@ public class RetrievalProperties {
 
     @Data
     public static class Ranking {
-        private double keywordHitWeight = 0.10;
-        private double variantHitWeight = 0.06;
-        private double primaryFieldKeywordHitWeight = 0.14;
-        private double primaryFieldExactMatchBonus = 0.20;
-        private double unresolvedEventBonus = 0.18;
-        private double plotHookBonus = 0.10;
-        private double exactMatchBonus = 0.16;
-        private double recencyMaxBoost = 0.12;
+        private double keywordHitWeight = 0.12;
+        private double variantHitWeight = 0.08;
+        private double primaryFieldKeywordHitWeight = 0.18;
+        private double primaryFieldExactMatchBonus = 0.25;
+        private double unresolvedEventBonus = 0.20;
+        private double plotHookBonus = 0.12;
+        private double exactMatchBonus = 0.18;
+        private double recencyMaxBoost = 0.15;
+        private double chapterProximityWeight = 0.30;
     }
 
     @Data

@@ -6,6 +6,7 @@ import com.novel.agent.exception.CostLimitExceededException;
 import com.novel.agent.repository.*;
 import com.novel.agent.service.DeepSeekService;
 import com.novel.agent.service.PostGenerationCheckService;
+import com.novel.agent.service.PostGenerationUpdateService;
 import com.novel.agent.service.ChatPromptSupport;
 import com.novel.agent.service.MilvusAdminService;
 import com.novel.agent.service.MilvusSearchService;
@@ -43,6 +44,7 @@ public class NovelController {
     private final TokenCostService tokenCostService;
     private final RetrievalProperties retrievalProperties;
     private final PostGenerationCheckService postGenerationCheckService;
+    private final PostGenerationUpdateService postGenerationUpdateService;
 
     // =============================================
     // 小说管理
@@ -119,7 +121,20 @@ public class NovelController {
 
         try {
             String generated = deepSeekService.chat(novelId, systemPrompt, userPrompt);
-            return generationResponse(context, generated, false, null);
+            ResponseEntity<Map<String, Object>> resp = generationResponse(context, generated, false, null);
+
+            // 续写后处理——Phase 2 闭环：持久化章节、伏笔抽取回收、Milvus segment upsert
+            // 任何一步失败都不影响主流程返回给用户的生成结果
+            try {
+                PostGenerationUpdateService.PostGenerationResult postResult =
+                        postGenerationUpdateService.postGenerate(novelId, effectiveChapterNum, generated);
+                resp.getBody().put("postGenerationUpdate", postResult);
+            } catch (Exception postEx) {
+                log.warn("Post-generation update 整体失败（不影响主流程）: {}", postEx.getMessage());
+                resp.getBody().put("postGenerationUpdateFailed", postEx.getMessage());
+            }
+
+            return resp;
         } catch (CostLimitExceededException ex) {
             return degradedGenerationResponse(
                     context,
